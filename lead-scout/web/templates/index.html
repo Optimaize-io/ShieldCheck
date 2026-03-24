@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lead Scout — NIS2 Security Scanner</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <!-- ═══ Header ═══ -->
+    <header class="header">
+        <div>
+            <h1>Lead Scout <span class="accent">Web</span></h1>
+            <p class="header-meta">NIS2 OSINT Security Scanner</p>
+        </div>
+        <div class="header-user">
+            <span>{{ username }}</span>
+            <a href="/logout" class="btn-logout">Logout</a>
+        </div>
+    </header>
+
+    <main class="dashboard">
+        <!-- ═══ Controls ═══ -->
+        <section class="section controls-bar">
+            <div class="controls-row">
+                <button class="btn btn-primary" onclick="openUploadModal()">📂 Load File</button>
+                <button class="btn btn-secondary" onclick="openAddModal()">＋ Add Company</button>
+                <button class="btn btn-ghost" onclick="clearCompanies()">🗑 Clear All</button>
+
+                <div class="spacer"></div>
+
+                <label class="ctrl-label">Timeout
+                    <input type="number" id="cfgTimeout" value="8" min="1" max="60" class="ctrl-input">
+                    <span class="ctrl-unit">s</span>
+                </label>
+                <label class="ctrl-label">Delay
+                    <input type="number" id="cfgDelay" value="1" min="0" max="30" class="ctrl-input">
+                    <span class="ctrl-unit">s</span>
+                </label>
+                <label class="ctrl-label">
+                    <input type="checkbox" id="cfgVerbose"> Verbose
+                </label>
+
+                <div class="spacer"></div>
+
+                <button class="btn btn-scan" id="btnStartScan" onclick="startScan()">▶ Start Scan</button>
+                <button class="btn btn-danger" id="btnStopScan" onclick="stopScan()" disabled>■ Stop</button>
+            </div>
+        </section>
+
+        <!-- ═══ Company Input Table ═══ -->
+        <section class="section">
+            <h2>📋 Companies to Scan <span id="companyCount" class="badge">0</span></h2>
+            <div class="table-wrap">
+                <table class="data-table" id="companyTable">
+                    <thead>
+                        <tr>
+                            <th style="width:40px">#</th>
+                            <th>Company Name</th>
+                            <th>Domain</th>
+                            <th>Sector</th>
+                            <th>Employees</th>
+                            <th style="width:50px"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="companyBody"></tbody>
+                </table>
+                <div id="companyEmpty" class="empty-msg">No companies loaded yet. Upload a CSV/JSON file or add
+                    companies manually.</div>
+            </div>
+        </section>
+
+        <!-- ═══ Progress ═══ -->
+        <section class="section" id="progressSection" style="display:none">
+            <h2>⏳ Scan Progress</h2>
+            <div class="progress-bar-wrap">
+                <div class="progress-bar" id="progressBar" style="width:0%"></div>
+            </div>
+            <div class="progress-text" id="progressText">0 / 0</div>
+        </section>
+
+        <!-- ═══ Stats Cards ═══ -->
+        <section id="statsSection" style="display:none">
+            <div class="stats-grid">
+                <div class="stat-card total">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value" id="statTotal">0</div>
+                    <div class="stat-label">Scanned</div>
+                </div>
+                <div class="stat-card hot">
+                    <div class="stat-icon">🔥</div>
+                    <div class="stat-value" id="statHot">0</div>
+                    <div class="stat-label">Hot Leads</div>
+                </div>
+                <div class="stat-card warm">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-value" id="statWarm">0</div>
+                    <div class="stat-label">Warm Leads</div>
+                </div>
+                <div class="stat-card cool">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value" id="statCool">0</div>
+                    <div class="stat-label">Cool Leads</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Results Table ═══ -->
+        <section class="section" id="resultsSection" style="display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem">
+                <h2>🏆 Scan Results</h2>
+                <div>
+                    <button class="btn btn-secondary" id="btnOpenReport" onclick="openReport()" style="display:none">📊
+                        Open HTML Report</button>
+                    <button class="btn btn-secondary" onclick="exportJSON()">📥 Export JSON</button>
+                </div>
+            </div>
+            <div class="table-wrap" style="margin-top:1rem">
+                <table class="data-table" id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th style="width:50px">#</th>
+                            <th>Tier</th>
+                            <th>Company</th>
+                            <th>Domain</th>
+                            <th>Score</th>
+                            <th>Findings</th>
+                            <th>Sector</th>
+                            <th style="width:50px"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ═══ Log Output ═══ -->
+        <section class="section" id="logSection" style="display:none">
+            <h2>📜 Scan Log</h2>
+            <div class="log-box" id="logBox"></div>
+        </section>
+    </main>
+
+    <!-- ═══ Add Company Modal ═══ -->
+    <div class="modal-overlay" id="addModal">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Add Company</h3>
+                <button class="modal-close" onclick="closeModal('addModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label">Company Name *
+                    <input type="text" id="addName" class="form-input" placeholder="Acme Corp">
+                </label>
+                <label class="form-label">Domain *
+                    <input type="text" id="addDomain" class="form-input" placeholder="acme.nl">
+                </label>
+                <label class="form-label">Sector
+                    <input type="text" id="addSector" class="form-input" placeholder="Unknown" value="Unknown">
+                </label>
+                <label class="form-label">Employees
+                    <input type="number" id="addEmployees" class="form-input" placeholder="100" value="100">
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('addModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="submitAddCompany()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Upload Modal ═══ -->
+    <div class="modal-overlay" id="uploadModal">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Upload Companies File</h3>
+                <button class="modal-close" onclick="closeModal('uploadModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom:1rem;color:var(--text-secondary)">Select a CSV or JSON file with columns: name,
+                    domain, sector, employees</p>
+                <input type="file" id="fileInput" accept=".csv,.json" class="form-input">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('uploadModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="submitUpload()">Upload</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Detail Modal ═══ -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal-card modal-wide" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="detailTitle">Company</h3>
+                <button class="modal-close" onclick="closeModal('detailModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="detailBody"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

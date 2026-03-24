@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — Lead Scout</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="login-wrapper">
+        <div class="login-card">
+            <div class="login-header">
+                <h1>Lead Scout <span class="accent">Web</span></h1>
+                <p class="header-meta">NIS2 OSINT Security Scanner</p>
+            </div>
+
+            {% if error %}
+            <div class="login-error">{{ error }}</div>
+            {% endif %}
+
+            <form method="POST" action="/login" class="login-form">
+                <label class="form-label">Username
+                    <input type="text" name="username" class="form-input" required autofocus autocomplete="username">
+                </label>
+                <label class="form-label">Password
+                    <input type="password" name="password" class="form-input" required autocomplete="current-password">
+                </label>
+                <button type="submit" class="btn btn-primary login-btn">Sign in</button>
+            </form>
+        </div>
+    </div>
+</body>
+
+</html>

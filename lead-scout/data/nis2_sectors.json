@@ -1,0 +1,184 @@
+{
+  "sectors": {
+    "essential": [
+      {
+        "id": "energy",
+        "name_en": "Energy",
+        "name_nl": "Energie",
+        "subsectors": ["Electricity", "District heating/cooling", "Oil", "Gas", "Hydrogen"],
+        "employee_threshold": 50,
+        "note": "Includes electricity supply, distribution, transmission; oil/gas production and storage"
+      },
+      {
+        "id": "transport",
+        "name_en": "Transport",
+        "name_nl": "Vervoer",
+        "subsectors": ["Air transport", "Rail transport", "Water transport", "Road transport"],
+        "employee_threshold": 50,
+        "note": "Includes airlines, airports, railways, shipping, ports, logistics"
+      },
+      {
+        "id": "banking",
+        "name_en": "Banking",
+        "name_nl": "Bankwezen",
+        "subsectors": ["Credit institutions"],
+        "employee_threshold": 50,
+        "note": "Credit institutions as defined in CRD"
+      },
+      {
+        "id": "financial_infrastructure",
+        "name_en": "Financial Market Infrastructure",
+        "name_nl": "Financiëlemarktinfrastructuur",
+        "subsectors": ["Trading venues", "CCPs", "CSDs"],
+        "employee_threshold": 50,
+        "note": "Market infrastructure operators"
+      },
+      {
+        "id": "healthcare",
+        "name_en": "Healthcare",
+        "name_nl": "Gezondheidszorg",
+        "subsectors": ["Healthcare providers", "EU reference laboratories", "Research", "Pharma manufacturing", "Medical devices"],
+        "employee_threshold": 50,
+        "note": "Hospitals, clinics, pharma companies, medical device manufacturers"
+      },
+      {
+        "id": "drinking_water",
+        "name_en": "Drinking Water",
+        "name_nl": "Drinkwater",
+        "subsectors": ["Drinking water supply and distribution"],
+        "employee_threshold": 50,
+        "note": "Water utilities"
+      },
+      {
+        "id": "wastewater",
+        "name_en": "Wastewater",
+        "name_nl": "Afvalwater",
+        "subsectors": ["Wastewater collection, treatment, and disposal"],
+        "employee_threshold": 50,
+        "note": "Wastewater treatment facilities"
+      },
+      {
+        "id": "digital_infrastructure",
+        "name_en": "Digital Infrastructure",
+        "name_nl": "Digitale Infrastructuur",
+        "subsectors": ["IXPs", "DNS service providers", "TLD name registries", "Cloud computing", "Data centers", "CDNs", "Trust service providers", "Electronic communications"],
+        "employee_threshold": 50,
+        "note": "Core internet infrastructure, datacenters, cloud providers"
+      },
+      {
+        "id": "ict_managed_services",
+        "name_en": "ICT Service Management",
+        "name_nl": "MSP's/MSSP's",
+        "subsectors": ["Managed service providers", "Managed security service providers"],
+        "employee_threshold": 50,
+        "note": "Companies providing managed IT/security services to other companies"
+      },
+      {
+        "id": "public_administration",
+        "name_en": "Public Administration",
+        "name_nl": "Openbaar Bestuur",
+        "subsectors": ["Central government", "Regional government"],
+        "employee_threshold": 1,
+        "note": "Government entities at all levels"
+      },
+      {
+        "id": "space",
+        "name_en": "Space",
+        "name_nl": "Ruimtevaart",
+        "subsectors": ["Ground-based infrastructure operators"],
+        "employee_threshold": 50,
+        "note": "Operators supporting space-based services"
+      }
+    ],
+    "important": [
+      {
+        "id": "postal",
+        "name_en": "Postal and Courier Services",
+        "name_nl": "Post- en koeriersdiensten",
+        "subsectors": ["Postal service providers", "Courier service providers"],
+        "employee_threshold": 50,
+        "note": "Mail and parcel delivery services"
+      },
+      {
+        "id": "waste_management",
+        "name_en": "Waste Management",
+        "name_nl": "Afvalbeheer",
+        "subsectors": ["Waste collection", "Waste treatment", "Waste recovery/disposal"],
+        "employee_threshold": 50,
+        "note": "Waste handling and recycling companies"
+      },
+      {
+        "id": "chemicals",
+        "name_en": "Manufacture, Production and Distribution of Chemicals",
+        "name_nl": "Chemie",
+        "subsectors": ["Chemical production", "Chemical distribution"],
+        "employee_threshold": 50,
+        "note": "Chemical industry"
+      },
+      {
+        "id": "food",
+        "name_en": "Food Production, Processing and Distribution",
+        "name_nl": "Levensmiddelen",
+        "subsectors": ["Food production", "Food processing", "Food wholesale distribution"],
+        "employee_threshold": 50,
+        "note": "Agriculture, food manufacturing, food distribution"
+      },
+      {
+        "id": "manufacturing",
+        "name_en": "Manufacturing",
+        "name_nl": "Vervaardiging",
+        "subsectors": ["Medical devices", "Computer/electronics", "Electrical equipment", "Machinery", "Motor vehicles", "Transport equipment"],
+        "employee_threshold": 50,
+        "note": "Manufacturing of critical products"
+      },
+      {
+        "id": "digital_providers",
+        "name_en": "Digital Providers",
+        "name_nl": "Digitale aanbieders",
+        "subsectors": ["Online marketplaces", "Online search engines", "Social networking platforms"],
+        "employee_threshold": 50,
+        "note": "Online platforms and services"
+      },
+      {
+        "id": "research",
+        "name_en": "Research",
+        "name_nl": "Onderzoek",
+        "subsectors": ["Research organisations"],
+        "employee_threshold": 50,
+        "note": "Research institutions not covered elsewhere"
+      }
+    ]
+  },
+  "dutch_implementation": {
+    "law_name": "Cyberbeveiligingswet",
+    "abbreviation": "Cbw",
+    "expected_effective_date": "2026-Q2",
+    "regulator": "Rijksinspectie Digitale Infrastructuur",
+    "notes": "Dutch implementation of EU NIS2 Directive. Replaces Wet beveiliging netwerk- en informatiesystemen (Wbni)."
+  },
+  "thresholds": {
+    "large_enterprise": {
+      "employees": 250,
+      "turnover_eur": 50000000,
+      "note": "Meet either threshold to qualify"
+    },
+    "medium_enterprise": {
+      "employees": 50,
+      "turnover_eur": 10000000,
+      "note": "Meet either threshold (and below large) to qualify"
+    }
+  },
+  "penalties": {
+    "essential_entities": {
+      "max_fine_eur": 10000000,
+      "max_fine_turnover_pct": 2,
+      "note": "Whichever is higher"
+    },
+    "important_entities": {
+      "max_fine_eur": 7000000,
+      "max_fine_turnover_pct": 1.4,
+      "note": "Whichever is higher"
+    },
+    "management_liability": "Personal liability for management/board members who fail to ensure compliance"
+  }
+}

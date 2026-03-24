@@ -1,0 +1,10 @@
+# Lead Scout - NIS2 OSINT Scanner for Nomios
+# Python 3.10+ required
+
+dnspython>=2.4.0
+requests>=2.31.0
+python-whois>=0.8.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+reportlab>=4.0.0
+flask>=3.0.0
