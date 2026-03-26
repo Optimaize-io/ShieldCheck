@@ -7,6 +7,7 @@ let companies = [];
 let results = [];
 let eventSource = null;
 let reportHtmlPath = null;
+let pdfPaths = {};
 
 // ─── Clock ───
 function updateClock() {
@@ -199,6 +200,10 @@ function startEventStream() {
       document.getElementById("btnOpenReport").style.display = "";
     }
 
+    if (data.pdf_paths) {
+      pdfPaths = data.pdf_paths;
+    }
+
     if (!data.running) {
       eventSource.close();
       eventSource = null;
@@ -242,6 +247,7 @@ function updateResults(newResults) {
     else if (tierClass === "warm") warm++;
     else cool++;
 
+    const hasPdf = pdfPaths[r.domain];
     const tr = document.createElement("tr");
     tr.innerHTML = `
             <td>${i + 1}</td>
@@ -251,7 +257,10 @@ function updateResults(newResults) {
             <td>${r.total_score.toFixed(1)} / ${r.max_score}</td>
             <td>${r.findings_count}</td>
             <td>${esc(r.sector)}</td>
-            <td><button class="btn btn-detail" onclick="showDetail(${i})">Details</button></td>
+            <td>
+                ${hasPdf ? `<button class="btn btn-ghost" style="padding:0.2rem 0.5rem;font-size:0.8rem" onclick="downloadPdf('${esc(r.domain)}')" title="Download PDF">📄</button>` : ""}
+                <button class="btn btn-detail" onclick="showDetail(${i})">Details</button>
+            </td>
         `;
     tbody.appendChild(tr);
   });
@@ -347,6 +356,13 @@ function showDetail(idx) {
     html += `</div>`;
   }
 
+  // PDF download button
+  if (pdfPaths[r.domain]) {
+    html += `<div class="detail-section" style="text-align:center;margin-top:1rem">
+      <button class="btn btn-primary" onclick="downloadPdf('${esc(r.domain)}')">📄 Download PDF Report</button>
+    </div>`;
+  }
+
   document.getElementById("detailBody").innerHTML = html;
   openModal("detailModal");
 }
@@ -354,6 +370,10 @@ function showDetail(idx) {
 // ─── Export / Reports ───
 function openReport() {
   if (reportHtmlPath) window.open(reportHtmlPath, "_blank");
+}
+
+function downloadPdf(domain) {
+  window.open(`/api/pdf/${encodeURIComponent(domain)}`, "_blank");
 }
 
 function exportJSON() {

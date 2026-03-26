@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from scout import LeadScout, CompanyInput, load_csv, load_json
 from scoring.scorer import LeadScore, LeadTier
+from reports.pdf_report import PDFReportGenerator
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -104,6 +105,7 @@ class ScanState:
         self.current_company = ""
         self.report_html_path: Optional[str] = None
         self.report_json_path: Optional[str] = None
+        self.pdf_paths: Dict[str, str] = {}  # domain -> pdf filename
 
     def reset(self):
         with self.lock:
@@ -115,6 +117,7 @@ class ScanState:
             self.stop_requested = False
             self.report_html_path = None
             self.report_json_path = None
+            self.pdf_paths.clear()
 
     def add_log(self, msg: str):
         with self.lock:
@@ -131,6 +134,7 @@ class ScanState:
                 "log": list(self.log_lines[-200:]),
                 "report_html": self.report_html_path,
                 "report_json": self.report_json_path,
+                "pdf_paths": dict(self.pdf_paths),
             }
 
 
@@ -218,6 +222,29 @@ def _scan_worker(
 
             state.report_html_path = f"/output/{Path(html_path).name}"
             state.report_json_path = json_path
+
+            # Generate individual PDF reports
+            pdf_dir = output_dir / "pdfs"
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                pdf_gen = PDFReportGenerator()
+                for lead in lead_scores:
+                    try:
+                        pdf_filename = (
+                            f"security_report_{lead.domain.replace('.', '_')}.pdf"
+                        )
+                        pdf_path = str(pdf_dir / pdf_filename)
+                        pdf_gen.generate(lead, pdf_path)
+                        with state.lock:
+                            state.pdf_paths[lead.domain] = pdf_filename
+                        state.add_log(f"PDF generated for {lead.company_name}")
+                    except Exception as e:
+                        state.add_log(f"PDF failed for {lead.company_name}: {e}")
+            except ImportError:
+                state.add_log("PDF generation skipped (reportlab not installed)")
+            except Exception as e:
+                state.add_log(f"PDF generation error: {e}")
+
             state.add_log(f"Reports saved to output/")
 
     except Exception as e:
@@ -465,6 +492,7 @@ def scan_stream():
                 "results": snap["results"],
                 "new_logs": new_logs,
                 "report_html": snap["report_html"],
+                "pdf_paths": snap["pdf_paths"],
             }
             yield f"data: {json.dumps(payload)}\n\n"
 
@@ -486,6 +514,18 @@ def scan_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/pdf/<domain>")
+@login_required
+def download_pdf(domain: str):
+    """Download a PDF report for a specific domain."""
+    with state.lock:
+        pdf_filename = state.pdf_paths.get(domain)
+    if not pdf_filename:
+        return jsonify({"error": "PDF not found for this domain"}), 404
+    pdf_dir = Path(__file__).parent / "output" / "pdfs"
+    return send_from_directory(str(pdf_dir), pdf_filename, as_attachment=True)
 
 
 @app.route("/output/<path:filename>")
