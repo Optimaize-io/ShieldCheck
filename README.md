@@ -1,4 +1,4 @@
-ShieldCheck runs on domain leadscout.optimaize.io
+ShieldCheck is a vibe coded Python solution and runs on domain leadscout.optimaize.io
 
 Systemd on is configured (leadscout-app.service) to start leadscout.
 
