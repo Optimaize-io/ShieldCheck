@@ -294,7 +294,7 @@ function showDetail(idx) {
     cookie_compliance: "Cookie Compliance",
     attack_surface: "Attack Surface",
     tech_stack: "Tech Stack",
-    admin_panel: "Admin Panel",
+    admin_panel: "Admin Exposure",
     security_hiring: "Security Hiring",
     security_governance: "Security Governance",
     security_communication: "Security Communication",
@@ -323,9 +323,16 @@ function showDetail(idx) {
   const scores = r.scores || {};
   for (const [key, label] of Object.entries(dimensionLabels)) {
     const s = scores[key] || {};
-    const val = s.score ?? "?";
-    const emoji = val === 0 ? "🔴" : val === 1 ? "🟡" : "🟢";
-    html += `<div class="score-row"><span>${emoji} ${label}</span><span class="score-val">${val}/2</span></div>`;
+    const analyzed = typeof s.score === "number" && typeof s.max_score === "number";
+    const scoreText = analyzed ? `${s.score}/${s.max_score}` : "N/A";
+
+    // In the popup we highlight "missing points" as orange (e.g. 2/3),
+    // even if the percentage would otherwise be green.
+    let status = "unknown";
+    if (analyzed) {
+      status = s.score === 0 ? "risk" : s.score < s.max_score ? "warning" : "ok";
+    }
+    html += `<div class="score-row"><span><span class="indicator indicator-${status}"></span>${label}</span><span class="score-val">${scoreText}</span></div>`;
   }
   html += `</div>`;
 
@@ -333,16 +340,7 @@ function showDetail(idx) {
   if (r.key_gaps && r.key_gaps.length) {
     html += `<div class="detail-section"><h4>Key Gaps</h4>`;
     r.key_gaps.forEach((g) => {
-      html += `<div class="gap-item">⚠ ${esc(g)}</div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Positive findings
-  if (r.positive_findings && r.positive_findings.length) {
-    html += `<div class="detail-section"><h4>Positive Findings</h4>`;
-    r.positive_findings.forEach((p) => {
-      html += `<div class="pos-item">✓ ${esc(p)}</div>`;
+      html += `<div class="gap-item gap-key">⚠ ${esc(g)}</div>`;
     });
     html += `</div>`;
   }
@@ -352,6 +350,38 @@ function showDetail(idx) {
     html += `<div class="detail-section"><h4>Sales Angles</h4>`;
     r.sales_angles.forEach((s) => {
       html += `<div class="sales-item">→ ${esc(s)}</div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Recommendations (present vs missing, color-coded)
+  const dimensionSummaries = [];
+  for (const [key, label] of Object.entries(dimensionLabels)) {
+    const s = scores[key] || {};
+    const analyzed = typeof s.score === "number" && typeof s.max_score === "number";
+    if (!analyzed) continue;
+
+    const present = Array.isArray(s.present) ? s.present : [];
+    const missing = Array.isArray(s.missing) ? s.missing : [];
+    const risks = Array.isArray(s.risks) ? s.risks : [];
+
+    if (!present.length && !missing.length && !risks.length) continue;
+    dimensionSummaries.push({ label, present, missing, risks });
+  }
+
+  if (dimensionSummaries.length) {
+    html += `<div class="detail-section"><h4>Recommendations</h4>`;
+    dimensionSummaries.forEach((d) => {
+      html += `<div style="margin:0.6rem 0 0.2rem 0;font-weight:600">${esc(d.label)}</div>`;
+      d.present.forEach((p) => {
+        html += `<div class="pos-item rec-present">✓ ${esc(p)}</div>`;
+      });
+      d.missing.forEach((m) => {
+        html += `<div class="gap-item rec-missing">✕ ${esc(m)}</div>`;
+      });
+      if (d.risks.length) {
+        html += `<div class="risk-item rec-risk">Risk: ${esc(d.risks[0])}</div>`;
+      }
     });
     html += `</div>`;
   }

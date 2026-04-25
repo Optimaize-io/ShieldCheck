@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 import io
 import os
+import json
 
 # ReportLab imports
 try:
@@ -29,6 +30,7 @@ try:
         ListItem,
         KeepTogether,
         Flowable,
+        Preformatted,
     )
     from reportlab.graphics.shapes import Drawing, Rect, String, Line
     from reportlab.graphics.charts.piecharts import Pie
@@ -64,7 +66,7 @@ class ScoreGauge(Flowable):
     def __init__(
         self,
         score: float,
-        max_score: float = 18.0,
+        max_score: float = 24.0,
         width: float = 150,
         height: float = 80,
     ):
@@ -212,10 +214,22 @@ class PDFReportGenerator:
                 "Recommendation",
                 parent=base_styles["Normal"],
                 fontSize=10,
-                textColor=Colors.SUCCESS,
+                textColor=Colors.ACCENT,
                 leading=14,
                 leftIndent=15,
                 spaceAfter=4,
+            ),
+            "CodeBlock": ParagraphStyle(
+                "CodeBlock",
+                parent=base_styles["Normal"],
+                fontName="Courier",
+                fontSize=8,
+                leading=10,
+                textColor=Colors.SECONDARY,
+                backColor=colors.HexColor("#f7fafc"),
+                borderPadding=(6, 6, 6, 6),
+                spaceBefore=6,
+                spaceAfter=10,
             ),
             "Footer": ParagraphStyle(
                 "Footer",
@@ -252,6 +266,9 @@ class PDFReportGenerator:
             bottomMargin=2 * cm,
         )
 
+        # Keep current lead for metadata/header/footer
+        self._current_lead = lead
+
         # Build story
         story = self._build_story(lead)
 
@@ -267,6 +284,16 @@ class PDFReportGenerator:
     def _add_header_footer(self, canvas, doc):
         """Add header and footer to each page."""
         canvas.saveState()
+
+        # PDF metadata (prevents "(anonymous)" title in many viewers)
+        lead = getattr(self, "_current_lead", None)
+        company = (getattr(lead, "company_name", None) or "").strip() if lead else ""
+        domain = (getattr(lead, "domain", None) or "").strip() if lead else ""
+        title = f"Security Assessment Report - {company or domain or 'Lead Scout'}"
+        canvas.setTitle(title)
+        canvas.setAuthor("Lead Scout")
+        if domain:
+            canvas.setSubject(f"Domain: {domain}")
 
         # Header line
         canvas.setStrokeColor(Colors.PRIMARY)
@@ -389,7 +416,7 @@ class PDFReportGenerator:
             ],
             [
                 Paragraph(
-                    f"<b>{lead.total_score:.1f}</b> / 18",
+                    f"<b>{lead.total_score:.1f}</b> / {lead.max_score:.0f}",
                     ParagraphStyle(
                         "ScoreValue",
                         fontSize=36,
@@ -458,9 +485,9 @@ class PDFReportGenerator:
         elements.append(
             Paragraph(
                 f"This security assessment of <b>{lead.company_name}</b> ({lead.domain}) identified "
-                f"<b>{lead.findings_count} findings</b> across nine key security dimensions. "
+                f"<b>{lead.findings_count} findings</b> across twelve key security dimensions. "
                 f"The overall security posture is rated as <b>{tier_text}</b> with a score of "
-                f"<b>{lead.total_score:.1f}/18</b>.",
+                f"<b>{lead.total_score:.1f}/{lead.max_score:.0f}</b>.",
                 self.styles["Body"],
             )
         )
@@ -499,20 +526,23 @@ class PDFReportGenerator:
             ("Cookie Compliance", lead.cookie_compliance),
             ("Attack Surface", lead.attack_surface),
             ("Technology Stack", lead.tech_stack),
+            ("Admin Exposure", lead.admin_panel),
+            ("Security Hiring", lead.security_hiring),
+            ("Security Governance", lead.security_governance),
             ("Security Communication", lead.security_communication),
             ("NIS2 Readiness", lead.nis2_readiness),
         ]
 
         score_data = [["Dimension", "Score", "Status"]]
         for name, dim in dimensions:
-            if dim:
-                status_color = self._get_score_color(dim.score)
+            if dim and dim.analyzed:
+                status_color = self._get_score_color(dim.score, dim.max_score)
                 status = (
-                    "🟢 Good"
-                    if dim.score == 2
-                    else ("🟡 Needs Work" if dim.score == 1 else "🔴 Critical")
+                    "🔴 Critical"
+                    if dim.status == "risk"
+                    else ("🟡 Needs Work" if dim.status == "warning" else "🟢 Good")
                 )
-                score_data.append([name, f"{dim.score}/2", status])
+                score_data.append([name, dim.display_score(), status])
             else:
                 score_data.append([name, "N/A", "⚪ Not Scanned"])
 
@@ -560,103 +590,104 @@ class PDFReportGenerator:
             )
         )
 
-        # Email Security
-        elements.extend(
-            self._build_dimension_section(
+        # Only include dimensions with actual issues (missing controls), using plain-language risk statements.
+        dimension_sections = [
+            (
                 "Email Security",
                 lead.email_security,
-                lead.dns_result,
-                "Email security protects against phishing, spoofing, and business email compromise (BEC) attacks. "
-                "SPF, DKIM, and DMARC are industry-standard protocols that validate email authenticity.",
-                self._get_email_findings(lead),
+                "Email security protects against phishing and spoofing. SPF, DKIM, and DMARC help prevent attackers from sending emails that look like they came from your domain.",
                 [
                     "Implement DMARC with a policy of 'reject' to prevent email spoofing",
                     "Configure SPF records to authorize legitimate mail servers",
                     "Enable DKIM signing for all outgoing emails",
                     "Monitor DMARC reports to detect unauthorized email sources",
                 ],
-            )
-        )
-
-        elements.append(Spacer(1, 0.5 * cm))
-
-        # TLS/SSL
-        elements.extend(
-            self._build_dimension_section(
+            ),
+            (
                 "TLS/SSL Certificate Security",
                 lead.tls_certificate,
-                lead.ssl_result,
-                "TLS certificates encrypt data in transit and establish trust with visitors. "
-                "Expired, misconfigured, or weak certificates can expose data and damage reputation.",
-                self._get_ssl_findings(lead),
+                "TLS certificates encrypt data in transit and establish trust with visitors. Expired, misconfigured, or weak TLS can expose data and damage reputation.",
                 [
                     "Ensure certificates are renewed well before expiration",
                     "Use TLS 1.2 or higher, disable older protocols",
-                    "Implement certificate transparency monitoring",
-                    "Consider using certificates with Extended Validation (EV)",
+                    "Implement certificate monitoring for unexpected changes",
                 ],
-            )
-        )
-
-        elements.append(Spacer(1, 0.5 * cm))
-
-        # HTTP Headers
-        elements.extend(
-            self._build_dimension_section(
+            ),
+            (
                 "HTTP Security Headers",
                 lead.http_headers,
-                lead.headers_result,
-                "Security headers protect against common web attacks like XSS, clickjacking, and MIME sniffing. "
-                "They are easy to implement and provide significant defense-in-depth protection.",
-                self._get_headers_findings(lead),
+                "Security headers help protect visitors against common web attacks (like malicious scripts, clickjacking, and data leakage). They are typically quick wins with a big impact.",
                 [
-                    "Implement Content-Security-Policy (CSP) to prevent XSS attacks",
-                    "Add X-Frame-Options or frame-ancestors to prevent clickjacking",
-                    "Enable HSTS with a long max-age to enforce HTTPS",
-                    "Configure X-Content-Type-Options to prevent MIME sniffing",
+                    "Add a Content-Security-Policy (CSP) to reduce the impact of malicious scripts",
+                    "Enable HSTS to enforce HTTPS for all visitors",
+                    "Add clickjacking protection (X-Frame-Options or frame-ancestors)",
+                    "Set X-Content-Type-Options to prevent content-type confusion attacks",
                 ],
-            )
-        )
-
-        elements.append(Spacer(1, 0.5 * cm))
-
-        # Cookie Compliance
-        elements.extend(
-            self._build_dimension_section(
+            ),
+            (
                 "Cookie Compliance",
                 lead.cookie_compliance,
-                lead.cookie_result,
-                "Cookie compliance relates to GDPR requirements for user consent and proper cookie security attributes. "
-                "Non-compliant cookie practices can result in regulatory fines and user privacy violations.",
-                self._get_cookie_findings(lead),
+                "Cookie compliance affects user privacy and regulatory exposure. Setting tracking cookies before consent and missing consent controls can create GDPR risk and reputational impact.",
                 [
                     "Implement a cookie consent mechanism compliant with GDPR",
-                    "Set Secure and HttpOnly flags on sensitive cookies",
-                    "Use SameSite attribute to prevent CSRF attacks",
-                    "Document all cookies and their purposes in a privacy policy",
+                    "Block non-essential tracking until consent is given",
+                    "Document cookies and their purposes in a privacy policy",
                 ],
-            )
-        )
-
-        elements.append(Spacer(1, 0.5 * cm))
-
-        # Attack Surface
-        elements.extend(
-            self._build_dimension_section(
+            ),
+            (
                 "Attack Surface",
                 lead.attack_surface,
-                lead.subdomain_result,
-                "Attack surface refers to all points where an attacker could try to enter or extract data. "
-                "Subdomains, exposed services, and forgotten infrastructure expand the attack surface.",
-                self._get_subdomain_findings(lead),
+                "Attack surface is the number of public entry points an attacker can target. Risky or forgotten subdomains and exposed services expand the ways a brand can be compromised.",
                 [
                     "Inventory all subdomains and decommission unused ones",
-                    "Implement consistent security controls across all subdomains",
-                    "Monitor certificate transparency logs for new certificates",
-                    "Regular security assessments of all exposed services",
+                    "Apply consistent security controls across subdomains",
+                    "Monitor for new subdomains and certificates over time",
                 ],
+            ),
+            (
+                "Technology Stack",
+                lead.tech_stack,
+                "Outdated or exposed technology increases the chance of known vulnerabilities being used against the site. This can lead to downtime, defacement, or data exposure.",
+                [
+                    "Patch outdated components and remove unnecessary services",
+                    "Reduce version leakage in HTTP responses where possible",
+                    "Set a regular update cadence for public-facing systems",
+                ],
+            ),
+            (
+                "Admin Exposure",
+                lead.admin_panel,
+                "Exposed admin panels are common targets for automated attacks. Without strong protection, they increase the risk of account takeover and service disruption.",
+                [
+                    "Restrict admin access (IP allowlisting/VPN) where possible",
+                    "Enforce MFA for administrative access",
+                    "Add brute-force protections (rate limiting/lockout)",
+                ],
+            ),
+        ]
+
+        rendered_any = False
+        for title, dim, explanation, recommendations in dimension_sections:
+            if not dim or not dim.analyzed or not dim.missing:
+                continue
+            rendered_any = True
+            elements.extend(
+                self._build_dimension_section(
+                    title=title,
+                    dimension=dim,
+                    explanation=explanation,
+                    recommendations=recommendations,
+                )
             )
-        )
+            elements.append(Spacer(1, 0.5 * cm))
+
+        if not rendered_any:
+            elements.append(
+                Paragraph(
+                    "No major issues were detected in the scanned dimensions. See the Technical Appendix for full scan data.",
+                    self.styles["Body"],
+                )
+            )
 
         return elements
 
@@ -664,20 +695,16 @@ class PDFReportGenerator:
         self,
         title: str,
         dimension,
-        raw_result,
         explanation: str,
-        findings: List[str],
         recommendations: List[str],
     ) -> List:
         """Build a section for a security dimension."""
         elements = []
 
         # Section header with score
-        if dimension:
-            score_color = self._get_score_color(dimension.score)
-            score_text = f"Score: {dimension.score}/2"
+        if dimension and dimension.analyzed:
+            score_text = f"Score: {dimension.display_score()}"
         else:
-            score_color = Colors.TEXT_LIGHT
             score_text = "Not Assessed"
 
         elements.append(
@@ -687,11 +714,21 @@ class PDFReportGenerator:
         # Explanation
         elements.append(Paragraph(explanation, self.styles["Body"]))
 
-        # Findings
-        if findings:
-            elements.append(Paragraph("<b>Findings:</b>", self.styles["Heading3"]))
-            for finding in findings:
-                elements.append(Paragraph(f"• {finding}", self.styles["Finding"]))
+        # Present vs missing (clear and non-technical)
+        if dimension and dimension.analyzed and dimension.present:
+            elements.append(Paragraph("<b>Already in place:</b>", self.styles["Heading3"]))
+            for item in dimension.present[:6]:
+                elements.append(Paragraph(f"• {item}", self.styles["Body"]))
+
+        if dimension and dimension.analyzed and dimension.missing:
+            elements.append(Paragraph("<b>What needs attention:</b>", self.styles["Heading3"]))
+            for item in dimension.missing:
+                elements.append(Paragraph(f"• {item}", self.styles["Finding"]))
+
+        if dimension and dimension.analyzed and dimension.risks:
+            elements.append(
+                Paragraph(f"<b>Risk:</b> {dimension.risks[0]}", self.styles["Body"])
+            )
 
         # Dimension-specific description
         if dimension and dimension.description:
@@ -704,11 +741,112 @@ class PDFReportGenerator:
             )
 
         # Recommendations
-        elements.append(Paragraph("<b>Recommendations:</b>", self.styles["Heading3"]))
-        for rec in recommendations[:3]:  # Top 3 recommendations
-            elements.append(Paragraph(f"✓ {rec}", self.styles["Recommendation"]))
+        elements.append(Paragraph("<b>Recommended next steps:</b>", self.styles["Heading3"]))
+        if dimension and dimension.analyzed and dimension.missing:
+            for missing_item in dimension.missing[:20]:
+                fix = self._next_step_for_missing(dimension, title, missing_item)
+                elements.append(
+                    Paragraph(
+                        f"! {missing_item} → {fix}",
+                        self.styles["Recommendation"],
+                    )
+                )
+        else:
+            for rec in recommendations[:10]:
+                elements.append(Paragraph(f"! {rec}", self.styles["Recommendation"]))
 
         return elements
+
+    def _generate_next_steps(self, dimension, title: str) -> List[str]:
+        """
+        Generate remediation steps based on the exact missing findings for a dimension.
+        Keeps output practical (engineer-friendly), avoids generic advice.
+        """
+        if not dimension or not getattr(dimension, "missing", None):
+            return []
+
+        missing: List[str] = list(dimension.missing or [])
+        steps: List[str] = []
+
+        def add(step: str):
+            step = (step or "").strip()
+            if step and step not in steps:
+                steps.append(step)
+
+        for item in missing:
+            add(self._next_step_for_missing(dimension, title, item))
+
+        return steps
+
+    def _next_step_for_missing(self, dimension, title: str, missing_item: str) -> str:
+        """Return a single remediation step for a single missing finding."""
+        dim_name = (getattr(dimension, "name", "") or title or "").lower()
+        item = (missing_item or "").strip()
+        msg = item.lower()
+
+        # TLS
+        if "tls certificate" in dim_name or "tls" in dim_name or "certificate" in dim_name:
+            if "expires" in msg:
+                return "Renew the TLS certificate and enable automated renewal/alerts well before expiry."
+            if "outdated tls" in msg or "outdated tls protocol" in msg or "protocol" in msg:
+                return "Disable legacy TLS versions and enforce TLS 1.2+ (prefer TLS 1.3) on the edge/load balancer."
+            if "no valid tls" in msg or "no valid" in msg:
+                return "Fix certificate trust issues (correct chain/hostname) so browsers can establish a trusted HTTPS connection."
+            return f"Address TLS issue: {item}"
+
+        # HTTP Headers
+        if "http headers" in dim_name or "headers" in dim_name:
+            if "content-security-policy" in msg:
+                return "Implement a Content-Security-Policy (CSP) starting in report-only mode, then tighten to an enforcing policy."
+            if "strict-transport-security" in msg or "hsts" in msg:
+                return "Enable HSTS with an appropriate max-age, includeSubDomains where safe, and consider preload after validation."
+            if "x-frame-options" in msg or "frame-ancestors" in msg:
+                return "Prevent clickjacking by setting X-Frame-Options or CSP frame-ancestors to the intended embedding origins."
+            if "x-content-type-options" in msg:
+                return "Set X-Content-Type-Options: nosniff to prevent content-type confusion in browsers."
+            if "referrer-policy" in msg:
+                return "Set Referrer-Policy to limit referrer leakage (e.g. strict-origin-when-cross-origin)."
+            if "permissions-policy" in msg:
+                return "Add a Permissions-Policy to explicitly disable unnecessary browser features."
+            return f"Add/adjust missing security header: {item}"
+
+        # Cookies/GDPR
+        if "cookie" in dim_name:
+            if "consent banner" in msg or "consent flow" in msg:
+                return "Implement a clear consent banner with granular choices (analytics/marketing) and store consent decisions."
+            if "tracking cookie" in msg or "tracking cookies" in msg:
+                return "Block analytics/marketing tags until consent is given (use your CMP to control tag firing)."
+            return f"Fix cookie compliance issue: {item}"
+
+        # Attack surface
+        if "attack surface" in dim_name or "subdomain" in dim_name:
+            if "risky subdomain exposed" in msg or "risky subdomain" in msg:
+                return "Restrict or retire the exposed subdomain (remove DNS if unused, require auth/VPN, and block indexing)."
+            return f"Reduce attack surface issue: {item}"
+
+        # Tech stack
+        if "tech stack" in dim_name or "technology stack" in dim_name:
+            if "outdated component" in msg or "outdated software" in msg or "outdated" in msg:
+                return "Patch or upgrade the identified component(s) to a supported version and verify against known CVEs."
+            if "versions are exposed" in msg or "version leakage" in msg or "exposed via headers" in msg:
+                return "Reduce version leakage by adjusting server/app headers (e.g. Server/X-Powered-By) where feasible."
+            return f"Remediate tech stack hygiene issue: {item}"
+
+        # Admin exposure
+        if "admin exposure" in dim_name or "admin" in dim_name or "login" in dim_name:
+            return "Restrict administrative endpoints (IP allowlist/VPN), enforce MFA, and add brute-force protections (rate limiting/lockout)."
+
+        # Email security
+        if "email security" in dim_name or "dmarc" in msg or "spf" in msg or "dkim" in msg:
+            if "dmarc" in msg:
+                return "Deploy DMARC with enforcement (quarantine/reject) and monitor DMARC aggregate reports."
+            if "spf" in msg:
+                return "Tighten SPF to only include legitimate sending services and end with a strict -all policy where possible."
+            if "dkim" in msg:
+                return "Enable DKIM signing for outbound mail and rotate keys periodically."
+            return f"Improve email authentication: {item}"
+
+        return f"Address: {item}"
 
     def _build_recommendations(self, lead: LeadScore) -> List:
         """Build the recommendations section."""
@@ -724,35 +862,75 @@ class PDFReportGenerator:
 
         elements.append(
             Paragraph(
-                "Based on the assessment findings, the following prioritized actions are recommended:",
+                "The recommendations below are derived from the exact missing controls detected during the scans.",
                 self.styles["Body"],
             )
         )
 
-        # Priority actions based on sales angles
-        if lead.sales_angles:
-            elements.append(Spacer(1, 0.5 * cm))
-            elements.append(Paragraph("Priority Actions", self.styles["Heading2"]))
-
-            for i, angle in enumerate(lead.sales_angles[:5], 1):
-                elements.append(Paragraph(f"<b>{i}.</b> {angle}", self.styles["Body"]))
-
-        # General recommendations
-        elements.append(Spacer(1, 0.5 * cm))
-        elements.append(
-            Paragraph("General Security Recommendations", self.styles["Heading2"])
-        )
-
-        general_recs = [
-            "Conduct regular security assessments and penetration tests",
-            "Implement a security awareness training program for employees",
-            "Establish an incident response plan and test it regularly",
-            "Review and update security policies on an annual basis",
-            "Consider engaging a managed security service provider (MSSP)",
+        remediation_rows = [["Dimension", "Missing finding", "How to fix"]]
+        dimensions = [
+            ("Email Security", lead.email_security),
+            ("Technical Hygiene", lead.technical_hygiene),
+            ("TLS/SSL Certificate", lead.tls_certificate),
+            ("HTTP Security Headers", lead.http_headers),
+            ("Cookie Compliance", lead.cookie_compliance),
+            ("Attack Surface", lead.attack_surface),
+            ("Technology Stack", lead.tech_stack),
+            ("Admin Exposure", lead.admin_panel),
+            ("Security Hiring", lead.security_hiring),
+            ("Security Governance", lead.security_governance),
+            ("Security Communication", lead.security_communication),
+            ("NIS2 Readiness", lead.nis2_readiness),
         ]
 
-        for rec in general_recs:
-            elements.append(Paragraph(f"• {rec}", self.styles["Body"]))
+        for title, dim in dimensions:
+            if not dim or not dim.analyzed or not dim.missing:
+                continue
+            for missing_item in dim.missing:
+                fix = self._next_step_for_missing(dim, title, missing_item)
+                remediation_rows.append(
+                    [
+                        Paragraph(title, self.styles["BodySmall"]),
+                        Paragraph(str(missing_item), self.styles["BodySmall"]),
+                        Paragraph(str(fix), self.styles["BodySmall"]),
+                    ]
+                )
+
+        if len(remediation_rows) > 1:
+            elements.append(Spacer(1, 0.5 * cm))
+            elements.append(
+                Paragraph("Prioritized Remediation Actions", self.styles["Heading2"])
+            )
+            table = Table(remediation_rows, colWidths=[4.0 * cm, 6.0 * cm, 6.0 * cm])
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("BACKGROUND", (0, 0), (-1, 0), Colors.PRIMARY),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), Colors.WHITE),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("GRID", (0, 0), (-1, -1), 0.5, Colors.TEXT_LIGHT),
+                        (
+                            "ROWBACKGROUNDS",
+                            (0, 1),
+                            (-1, -1),
+                            [Colors.WHITE, colors.HexColor("#f7fafc")],
+                        ),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ]
+                )
+            )
+            elements.append(table)
+        else:
+            elements.append(Spacer(1, 0.5 * cm))
+            elements.append(
+                Paragraph(
+                    "No missing controls were detected in the analyzed dimensions.",
+                    self.styles["Body"],
+                )
+            )
 
         # NIS2 specific if applicable
         if lead.nis2_covered:
@@ -775,7 +953,7 @@ class PDFReportGenerator:
         return elements
 
     def _build_technical_appendix(self, lead: LeadScore) -> List:
-        """Build the comprehensive technical appendix with all factual scan data (Dutch)."""
+        """Build the comprehensive technical appendix with all factual scan data (English)."""
         elements = []
 
         elements.append(Paragraph("Technical Appendix", self.styles["Heading1"]))
@@ -787,115 +965,107 @@ class PDFReportGenerator:
 
         elements.append(
             Paragraph(
-                "Deze bijlage bevat alle feitelijke technische data uit de security assessment. "
-                "Per dimensie die <b>rood</b> of <b>oranje</b> scoort is een gedetailleerd blok opgenomen "
-                "met alle gevonden informatie.",
+                "This appendix contains the factual technical data from the security assessment. "
+                "For engineers, it includes per-scan technical details and raw scan output (when available).",
                 self.styles["Body"],
             )
         )
 
-        # Collect dimensions that scored RED (0) or ORANGE (1)
-        dimensions_to_detail = []
-        dim_map = [
-            (
-                "vuln",
-                "Bekende Kwetsbaarheden",
-                lead.technical_hygiene,
-                lead.shodan_result,
-            ),
-            ("email", "E-mail Beveiliging", lead.email_security, lead.dns_result),
-            ("headers", "Security Headers", lead.http_headers, lead.headers_result),
-            (
-                "subdomains",
-                "Aanvalsoppervlak / Subdomains",
-                lead.attack_surface,
-                lead.subdomain_result,
-            ),
-            ("ssl", "TLS/SSL Certificaat", lead.tls_certificate, lead.ssl_result),
-            ("admin", "Admin Panels", lead.admin_panel, lead.admin_result),
-            (
-                "governance",
-                "Security Governance",
-                lead.security_governance,
-                lead.governance_result,
-            ),
-            ("techstack", "Tech Stack", lead.tech_stack, lead.techstack_result),
+        # Include all scans that produced results (not N/A)
+        scan_sections = [
+            ("vuln", "Known Vulnerabilities (Shodan)", lead.technical_hygiene, lead.shodan_result, self._appendix_vulnerabilities),
+            ("email", "Email Security (DNS)", lead.email_security, lead.dns_result, self._appendix_email),
+            ("ssl", "TLS/SSL Certificate", lead.tls_certificate, lead.ssl_result, self._appendix_ssl),
+            ("headers", "HTTP Security Headers", lead.http_headers, lead.headers_result, self._appendix_headers),
+            ("cookies", "Cookies & Consent", lead.cookie_compliance, lead.cookie_result, self._appendix_cookies),
+            ("subdomains", "Attack Surface / Subdomains", lead.attack_surface, lead.subdomain_result, self._appendix_subdomains),
+            ("techstack", "Technology Stack", lead.tech_stack, lead.techstack_result, self._appendix_techstack),
+            ("admin", "Admin Panels", lead.admin_panel, lead.admin_result, self._appendix_admin),
+            ("jobs", "Jobs / Hiring Signals", lead.security_hiring, lead.jobs_result, self._appendix_jobs),
+            ("website", "Website Content Signals", lead.security_communication, lead.website_result, self._appendix_website),
+            ("governance", "Security Governance", lead.security_governance, lead.governance_result, self._appendix_governance),
         ]
 
-        for key, title, dim, raw in dim_map:
-            if dim and dim.score <= 1:
-                # Skip dimensions without useful data (e.g. scan timed out, 0 results)
-                if (
-                    key == "subdomains"
-                    and raw
-                    and (raw.total_count or 0) == 0
-                    and not raw.risky_subdomains
-                ):
-                    continue
-                if key == "vuln" and raw and not raw.vulns and not raw.risky_ports:
-                    continue
-                dimensions_to_detail.append((key, title, dim, raw))
+        any_added = False
+        for _key, title, dim, raw, builder in scan_sections:
+            if not raw:
+                continue
+            any_added = True
 
-        if not dimensions_to_detail:
+            status = getattr(dim, "status", "unknown") if dim else "unknown"
+            score_color = (
+                Colors.DANGER if status == "risk" else Colors.WARNING if status == "warning" else Colors.SUCCESS if status == "ok" else Colors.TEXT_LIGHT
+            )
+            score_label = (
+                "CRITICAL"
+                if status == "risk"
+                else "NEEDS ATTENTION"
+                if status == "warning"
+                else "OK"
+                if status == "ok"
+                else "UNKNOWN"
+            )
+            score_text = dim.display_score() if dim and getattr(dim, "analyzed", False) else "N/A"
+
+            elements.append(Spacer(1, 0.5 * cm))
             elements.append(
                 Paragraph(
-                    "Alle dimensies scoren groen — er zijn geen detail-blokken vereist.",
+                    f'<font color="{score_color.hexval()}">\u25cf</font> <b>{title}</b>  '
+                    f'<font color="{score_color.hexval()}" size="9">({score_label} — {score_text})</font>',
+                    self.styles["Heading2"],
+                )
+            )
+
+            elements.extend(builder(lead))
+            elements.extend(self._appendix_raw_json_block(raw))
+
+        if not any_added:
+            elements.append(
+                Paragraph(
+                    "No scan results available to include (all scans N/A or failed).",
                     self.styles["Body"],
                 )
             )
-        else:
-            for key, title, dim, raw in dimensions_to_detail:
-                score_label = "KRITIEK" if dim.score == 0 else "AANDACHT NODIG"
-                score_color = Colors.DANGER if dim.score == 0 else Colors.WARNING
-
-                elements.append(Spacer(1, 0.5 * cm))
-                elements.append(
-                    Paragraph(
-                        f'<font color="{score_color.hexval()}">\u25cf</font> <b>{title}</b>  '
-                        f'<font color="{score_color.hexval()}" size="9">({score_label} — {dim.score}/2)</font>',
-                        self.styles["Heading2"],
-                    )
-                )
-
-                if key == "vuln":
-                    elements.extend(self._appendix_vulnerabilities(lead))
-                elif key == "email":
-                    elements.extend(self._appendix_email(lead))
-                elif key == "headers":
-                    elements.extend(self._appendix_headers(lead))
-                elif key == "subdomains":
-                    elements.extend(self._appendix_subdomains(lead))
-                elif key == "ssl":
-                    elements.extend(self._appendix_ssl(lead))
-                elif key == "admin":
-                    elements.extend(self._appendix_admin(lead))
-                elif key == "governance":
-                    elements.extend(self._appendix_governance(lead))
-                elif key == "techstack":
-                    elements.extend(self._appendix_techstack(lead))
 
         # Methodology (always included)
         elements.append(PageBreak())
-        elements.append(Paragraph("Assessment Methodologie", self.styles["Heading2"]))
+        elements.append(Paragraph("Assessment Methodology", self.styles["Heading2"]))
         elements.append(
             Paragraph(
-                "Dit assessment is uitgevoerd met uitsluitend passieve reconnaissance-technieken. "
-                "Er is geen actieve penetratietest of exploitatie uitgevoerd. Gebruikte bronnen:",
+                "This assessment uses passive reconnaissance techniques only. "
+                "No active penetration testing or exploitation was performed. Sources used:",
                 self.styles["Body"],
             )
         )
         methodology_items = [
             "DNS record queries (SPF, DMARC, DKIM, MX, TXT)",
-            "SSL/TLS certificaat-analyse",
-            "HTTP response header inspectie",
-            "Shodan InternetDB (open poorten, CVEs, services)",
-            "Certificate Transparency logs (crt.sh) voor subdomain-discovery",
-            "Publieke website-analyse (tech stack, admin panels, governance)",
-            "Cookie- en consent-mechanisme inspectie",
+            "SSL/TLS certificate analysis",
+            "HTTP response header inspection",
+            "Shodan InternetDB (open ports, CVEs, services)",
+            "Certificate Transparency logs (crt.sh) for subdomain discovery",
+            "Public website analysis (tech stack, admin panels, governance)",
+            "Cookie and consent mechanism inspection",
         ]
         for item in methodology_items:
             elements.append(Paragraph(f"\u2022 {item}", self.styles["BodySmall"]))
 
+        return elements
+
+    def _appendix_raw_json_block(self, raw_obj) -> List:
+        """Append a raw JSON dump of a scan result (engineer-friendly)."""
+        elements: List = []
+        try:
+            data = raw_obj.to_dict() if hasattr(raw_obj, "to_dict") else raw_obj
+            raw_json = json.dumps(data, indent=2, ensure_ascii=False)
+        except Exception as e:
+            elements.append(
+                Paragraph(f"<i>Raw output not available: {e}</i>", self.styles["BodySmall"])
+            )
+            return elements
+
+        elements.append(Spacer(1, 0.2 * cm))
+        elements.append(Paragraph("<b>Raw scan output (JSON)</b>", self.styles["Heading3"]))
+        elements.append(Preformatted(raw_json, self.styles["CodeBlock"]))
         return elements
 
     # ------------------------------------------------------------------
@@ -903,14 +1073,14 @@ class PDFReportGenerator:
     # ------------------------------------------------------------------
 
     def _appendix_vulnerabilities(self, lead: LeadScore) -> List:
-        """Bekende Kwetsbaarheden detail block."""
+        """Known vulnerabilities detail block."""
         elements = []
         shodan = lead.shodan_result
 
         if not shodan:
             elements.append(
                 Paragraph(
-                    "<i>Shodan-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Shodan scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
@@ -918,7 +1088,7 @@ class PDFReportGenerator:
         # Server IP
         elements.append(
             Paragraph(
-                f"<b>Server IP:</b> {shodan.ip_address or 'Onbekend'}",
+                f"<b>Server IP:</b> {shodan.ip_address or 'Unknown'}",
                 self.styles["Body"],
             )
         )
@@ -926,14 +1096,14 @@ class PDFReportGenerator:
         # Detected software (CPEs)
         if shodan.cpes:
             elements.append(
-                Paragraph("<b>Gedetecteerde software (CPE):</b>", self.styles["Body"])
+                Paragraph("<b>Detected software (CPE):</b>", self.styles["Body"])
             )
             for cpe in shodan.cpes:
                 elements.append(Paragraph(f"\u2022 {cpe}", self.styles["BodySmall"]))
         else:
             elements.append(
                 Paragraph(
-                    "<b>Gedetecteerde software:</b> Geen CPE-informatie beschikbaar",
+                    "<b>Detected software:</b> No CPE information available",
                     self.styles["Body"],
                 )
             )
@@ -943,7 +1113,7 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
                 Paragraph(
-                    f"<b>Totaal aantal CVEs:</b> {len(shodan.vulns)}",
+                    f"<b>Total CVEs:</b> {len(shodan.vulns)}",
                     self.styles["Body"],
                 )
             )
@@ -956,14 +1126,14 @@ class PDFReportGenerator:
             if len(shodan.vulns) > 10:
                 elements.append(
                     Paragraph(
-                        f"<i>... en {len(shodan.vulns) - 10} overige CVEs (volledige lijst beschikbaar op aanvraag)</i>",
+                        f"<i>... and {len(shodan.vulns) - 10} more CVEs (full list available on request)</i>",
                         self.styles["BodySmall"],
                     )
                 )
         else:
             elements.append(
                 Paragraph(
-                    "<b>CVEs:</b> Geen bekende kwetsbaarheden gevonden",
+                    "<b>CVEs:</b> No known vulnerabilities found",
                     self.styles["Body"],
                 )
             )
@@ -971,16 +1141,16 @@ class PDFReportGenerator:
         # Open ports
         if shodan.ports:
             elements.append(Spacer(1, 0.3 * cm))
-            port_data = [["Poort", "Service", "Risico"]]
+            port_data = [["Port", "Service", "Risk"]]
             risky_set = set(shodan.risky_ports or [])
             for port in sorted(shodan.ports):
                 service = shodan.risky_ports_detail.get(
                     port, self._port_service_name(port)
                 )
                 if port in risky_set:
-                    risk = "HOOG RISICO"
+                    risk = "HIGH RISK"
                 else:
-                    risk = "Normaal"
+                    risk = "Normal"
                 port_data.append([str(port), service, risk])
             port_table = Table(port_data, colWidths=[3 * cm, 7 * cm, 4 * cm])
             style = self._detail_table_style(len(port_data))
@@ -990,12 +1160,12 @@ class PDFReportGenerator:
                     style.add("TEXTCOLOR", (2, i), (2, i), Colors.DANGER)
                     style.add("FONTNAME", (2, i), (2, i), "Helvetica-Bold")
             port_table.setStyle(style)
-            elements.append(Paragraph("<b>Open poorten:</b>", self.styles["Body"]))
+            elements.append(Paragraph("<b>Open ports:</b>", self.styles["Body"]))
             elements.append(port_table)
         else:
             elements.append(
                 Paragraph(
-                    "<b>Open poorten:</b> Geen open poorten gedetecteerd",
+                    "<b>Open ports:</b> No open ports detected",
                     self.styles["Body"],
                 )
             )
@@ -1005,14 +1175,14 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
                 Paragraph(
-                    "<b>Risicovolle poorten — toelichting:</b>", self.styles["Body"]
+                    "<b>High-risk ports — details:</b>", self.styles["Body"]
                 )
             )
             for port in shodan.risky_ports:
                 detail = shodan.risky_ports_detail.get(port, "")
                 elements.append(
                     Paragraph(
-                        f'\u2022 <font color="{Colors.DANGER.hexval()}"><b>Poort {port}</b></font>: {detail}',
+                        f'\u2022 <font color="{Colors.DANGER.hexval()}"><b>Port {port}</b></font>: {detail}',
                         self.styles["Finding"],
                     )
                 )
@@ -1020,13 +1190,13 @@ class PDFReportGenerator:
         return elements
 
     def _appendix_email(self, lead: LeadScore) -> List:
-        """E-mail Beveiliging detail block."""
+        """Email security detail block."""
         elements = []
         dns = lead.dns_result
 
         if not dns:
             elements.append(
-                Paragraph("<i>DNS-scan niet beschikbaar.</i>", self.styles["BodySmall"])
+                Paragraph("<i>DNS scan not available.</i>", self.styles["BodySmall"])
             )
             return elements
 
@@ -1041,21 +1211,21 @@ class PDFReportGenerator:
         elements.append(Paragraph(f"<b>SPF Record:</b>", self.styles["Body"]))
         elements.append(
             Paragraph(
-                f"{dns.spf_record or 'Niet geconfigureerd'}", self.styles["BodySmall"]
+                f"{dns.spf_record or 'Not configured'}", self.styles["BodySmall"]
             )
         )
         spf_assessment = (
-            "hard fail (-all) — goed"
+            "hard fail (-all) — good"
             if "-all" in (dns.spf_record or "")
             else (
-                "soft fail (~all) — zwak"
+                "soft fail (~all) — weak"
                 if "~all" in (dns.spf_record or "")
-                else ("ontbreekt — geen bescherming" if not has_spf else spf_policy)
+                else ("missing — no protection" if not has_spf else spf_policy)
             )
         )
         elements.append(
             Paragraph(
-                f'<font color="{spf_color.hexval()}">Beoordeling: {spf_assessment}</font>',
+                f'<font color="{spf_color.hexval()}">Assessment: {spf_assessment}</font>',
                 self.styles["BodySmall"],
             )
         )
@@ -1073,18 +1243,18 @@ class PDFReportGenerator:
         elements.append(Paragraph(f"<b>DMARC Record:</b>", self.styles["Body"]))
         elements.append(
             Paragraph(
-                f"{dns.dmarc_record or 'Niet geconfigureerd'}", self.styles["BodySmall"]
+                f"{dns.dmarc_record or 'Not configured'}", self.styles["BodySmall"]
             )
         )
         dmarc_assessment = {
-            "reject": "reject — goed, foutieve mails worden geweigerd",
-            "quarantine": "quarantine — matig, foutieve mails gaan naar spam",
-            "none (monitoring only)": "none — alleen monitoring, geen handhaving",
-            "missing": "ontbreekt — geen DMARC-bescherming",
+            "reject": "reject — good, unauthenticated mail is rejected",
+            "quarantine": "quarantine — moderate, unauthenticated mail goes to spam",
+            "none (monitoring only)": "none — monitoring only, no enforcement",
+            "missing": "missing — no DMARC protection",
         }.get(dmarc_policy, dmarc_policy)
         elements.append(
             Paragraph(
-                f'<font color="{dmarc_color.hexval()}">Beoordeling: {dmarc_assessment}</font>',
+                f'<font color="{dmarc_color.hexval()}">Assessment: {dmarc_assessment}</font>',
                 self.styles["BodySmall"],
             )
         )
@@ -1097,14 +1267,14 @@ class PDFReportGenerator:
         if dns.dkim_found:
             elements.append(
                 Paragraph(
-                    f'<font color="{dkim_color.hexval()}">Gevonden</font> (selector: {dns.dkim_selector or "onbekend"})',
+                    f'<font color="{dkim_color.hexval()}">Found</font> (selector: {dns.dkim_selector or "unknown"})',
                     self.styles["BodySmall"],
                 )
             )
         else:
             elements.append(
                 Paragraph(
-                    f'<font color="{dkim_color.hexval()}">Niet gevonden</font> — gezocht bij selectors: '
+                    f'<font color="{dkim_color.hexval()}">Not found</font> — checked common selectors: '
                     f"google, selector1, selector2, default, mail, k1, dkim, s1, s2, protonmail, etc.",
                     self.styles["BodySmall"],
                 )
@@ -1116,16 +1286,16 @@ class PDFReportGenerator:
         if not has_dmarc or dmarc_policy in ("missing", "none (monitoring only)"):
             elements.append(
                 Paragraph(
-                    f'<font color="{Colors.DANGER.hexval()}"><b>Risico-uitleg:</b></font> '
-                    f"Met de huidige configuratie kan iemand een e-mail sturen als ceo@{lead.domain} "
-                    f"aan elke willekeurige ontvanger. De ontvanger ziet geen verschil met een echt bericht.",
+                    f'<font color="{Colors.DANGER.hexval()}"><b>Risk explanation:</b></font> '
+                    f"With the current configuration, someone could send an email as ceo@{lead.domain} "
+                    f"to any recipient. Many recipients will not be able to tell it apart from a legitimate message.",
                     self.styles["Body"],
                 )
             )
 
         elements.append(
             Paragraph(
-                "<b>Verificatie:</b> Controleerbaar via MXToolbox.com — voer het domein in en bekijk de DMARC-status.",
+                "<b>Verification:</b> You can verify via MXToolbox.com — enter the domain and check the DMARC status.",
                 self.styles["BodySmall"],
             )
         )
@@ -1140,7 +1310,7 @@ class PDFReportGenerator:
         if not hdr:
             elements.append(
                 Paragraph(
-                    "<i>Header-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Header scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
@@ -1152,7 +1322,7 @@ class PDFReportGenerator:
         # Present headers
         present_list = [h for h in hp.keys()]
         if present_list:
-            elements.append(Paragraph("<b>Aanwezige headers:</b>", self.styles["Body"]))
+            elements.append(Paragraph("<b>Present headers:</b>", self.styles["Body"]))
             for h in present_list:
                 elements.append(
                     Paragraph(
@@ -1161,14 +1331,14 @@ class PDFReportGenerator:
                     )
                 )
 
-        # Missing headers with risk explanation (Dutch)
+        # Missing headers with risk explanation
         header_risks = {
-            "Strict-Transport-Security": "Verkeer kan onderschept worden op onveilige verbindingen",
-            "Content-Security-Policy": "Kwaadaardige scripts kunnen ge\u00efnjecteerd worden (XSS)",
-            "X-Frame-Options": "Website kan in onzichtbaar frame geladen worden (clickjacking)",
-            "X-Content-Type-Options": "Browser kan bestanden verkeerd interpreteren als uitvoerbare code",
-            "Referrer-Policy": "Interne URLs en sessie-informatie lekken naar externe partijen",
-            "Permissions-Policy": "Ge\u00efnjecteerde code kan camera/microfoon/locatie aanvragen",
+            "Strict-Transport-Security": "Traffic can be downgraded or intercepted on hostile networks",
+            "Content-Security-Policy": "Malicious scripts can be injected more easily (XSS/injection impact)",
+            "X-Frame-Options": "Site can be embedded in an invisible frame (clickjacking)",
+            "X-Content-Type-Options": "Browser may interpret files as executable content in edge cases",
+            "Referrer-Policy": "Internal URLs and identifiers can leak to external parties",
+            "Permissions-Policy": "Injected code may be able to request sensitive browser features",
         }
         missing = hdr.headers_missing or []
         # Also check standard headers not in headers_present
@@ -1178,10 +1348,10 @@ class PDFReportGenerator:
 
         if missing:
             elements.append(Spacer(1, 0.3 * cm))
-            miss_data = [["Header", "Status", "Risico"]]
+            miss_data = [["Header", "Status", "Risk"]]
             for h in missing:
-                risk = header_risks.get(h, "Beveiligingsrisico")
-                miss_data.append([h, "Ontbreekt", risk])
+                risk = header_risks.get(h, "Security risk")
+                miss_data.append([h, "Missing", risk])
             miss_table = Table(miss_data, colWidths=[5 * cm, 2.5 * cm, 9 * cm])
             style = self._detail_table_style(len(miss_data))
             # Color the Status column red
@@ -1190,7 +1360,7 @@ class PDFReportGenerator:
                 style.add("FONTNAME", (1, i), (1, i), "Helvetica-Bold")
             miss_table.setStyle(style)
             elements.append(
-                Paragraph("<b>Ontbrekende headers:</b>", self.styles["Body"])
+                Paragraph("<b>Missing headers:</b>", self.styles["Body"])
             )
             elements.append(miss_table)
 
@@ -1198,7 +1368,7 @@ class PDFReportGenerator:
         if hdr.info_leakage:
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
-                Paragraph("<b>Informatie-lekkage via headers:</b>", self.styles["Body"])
+                Paragraph("<b>Information leakage via headers:</b>", self.styles["Body"])
             )
             for header_name, value in hdr.info_leakage.items():
                 elements.append(
@@ -1211,14 +1381,14 @@ class PDFReportGenerator:
         return elements
 
     def _appendix_subdomains(self, lead: LeadScore) -> List:
-        """Aanvalsoppervlak / Subdomains detail block."""
+        """Attack surface / subdomains detail block."""
         elements = []
         sub = lead.subdomain_result
 
         if not sub:
             elements.append(
                 Paragraph(
-                    "<i>Subdomain-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Subdomain scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
@@ -1226,13 +1396,13 @@ class PDFReportGenerator:
         total = sub.total_count or len(sub.subdomains_found or [])
         elements.append(
             Paragraph(
-                f"<b>Totaal subdomains gevonden:</b> {total}", self.styles["Body"]
+                f"<b>Total subdomains found:</b> {total}", self.styles["Body"]
             )
         )
 
         # Risky subdomains table
         if sub.risky_subdomains:
-            risky_data = [["Subdomain", "Type", "Risico"]]
+            risky_data = [["Subdomain", "Type", "Risk"]]
             for risky in sub.risky_subdomains:
                 if isinstance(risky, dict):
                     name = risky.get("subdomain", risky.get("name", str(risky)))
@@ -1249,7 +1419,7 @@ class PDFReportGenerator:
             risky_table.setStyle(style)
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
-                Paragraph("<b>Risicovolle subdomains:</b>", self.styles["Body"])
+                Paragraph("<b>Risky subdomains:</b>", self.styles["Body"])
             )
             elements.append(risky_table)
 
@@ -1259,7 +1429,7 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 0.2 * cm))
             elements.append(
                 Paragraph(
-                    f"<b>Niet-risicovolle subdomains:</b> {neutral_count} reguliere subdomains "
+                    f"<b>Non-risky subdomains:</b> {neutral_count} regular subdomains "
                     f"(www, mail, cdn, etc.)",
                     self.styles["Body"],
                 )
@@ -1268,38 +1438,38 @@ class PDFReportGenerator:
         return elements
 
     def _appendix_ssl(self, lead: LeadScore) -> List:
-        """TLS/SSL Certificaat detail block."""
+        """TLS/SSL certificate detail block."""
         elements = []
         ssl = lead.ssl_result
 
         if not ssl:
             elements.append(
-                Paragraph("<i>SSL-scan niet beschikbaar.</i>", self.styles["BodySmall"])
+                Paragraph("<i>SSL scan not available.</i>", self.styles["BodySmall"])
             )
             return elements
 
         # Certificate info table
-        valid_text = "Ja" if ssl.certificate_valid else "Nee"
+        valid_text = "Yes" if ssl.certificate_valid else "No"
         valid_color = Colors.SUCCESS if ssl.certificate_valid else Colors.DANGER
 
-        not_before_str = str(ssl.not_before) if ssl.not_before else "Onbekend"
-        not_after_str = str(ssl.not_after) if ssl.not_after else "Onbekend"
+        not_before_str = str(ssl.not_before) if ssl.not_before else "Unknown"
+        not_after_str = str(ssl.not_after) if ssl.not_after else "Unknown"
 
         days_text = (
             str(ssl.days_until_expiry) if ssl.days_until_expiry is not None else "N/A"
         )
         if ssl.days_until_expiry is not None and ssl.days_until_expiry < 90:
-            days_text += "  ⚠️ WAARSCHUWING: minder dan 90 dagen"
+            days_text += "  ⚠️ WARNING: less than 90 days"
 
-        protocol = ssl.protocol_version or "Onbekend"
+        protocol = ssl.protocol_version or "Unknown"
 
         ssl_data = [
-            ["Eigenschap", "Waarde"],
-            ["Certificaat geldig", valid_text],
-            ["Issuer", ssl.issuer or "Onbekend"],
-            ["Geldig van", not_before_str],
-            ["Geldig tot", not_after_str],
-            ["Dagen tot expiry", days_text],
+            ["Property", "Value"],
+            ["Certificate valid", valid_text],
+            ["Issuer", ssl.issuer or "Unknown"],
+            ["Valid from", not_before_str],
+            ["Valid until", not_after_str],
+            ["Days until expiry", days_text],
             ["Protocol", protocol],
         ]
 
@@ -1309,7 +1479,7 @@ class PDFReportGenerator:
                     "SAN Domains",
                     ", ".join(ssl.san_domains[:10])
                     + (
-                        f" (+{len(ssl.san_domains)-10} meer)"
+                        f" (+{len(ssl.san_domains)-10} more)"
                         if len(ssl.san_domains) > 10
                         else ""
                     ),
@@ -1329,20 +1499,20 @@ class PDFReportGenerator:
         weak_points = []
         if protocol and ("1.0" in protocol or "1.1" in protocol):
             weak_points.append(
-                f"Verouderd protocol ({protocol}) — TLS 1.0/1.1 is onveilig en deprecated"
+                f"Outdated protocol ({protocol}) — TLS 1.0/1.1 is insecure and deprecated"
             )
         if ssl.issuer and "self" in (ssl.issuer or "").lower():
-            weak_points.append("Self-signed certificaat — niet vertrouwd door browsers")
+            weak_points.append("Self-signed certificate — not trusted by browsers")
         if ssl.days_until_expiry is not None and ssl.days_until_expiry <= 0:
-            weak_points.append("Certificaat is VERLOPEN")
+            weak_points.append("Certificate is EXPIRED")
         elif ssl.days_until_expiry is not None and ssl.days_until_expiry < 30:
             weak_points.append(
-                f"Certificaat verloopt binnen {ssl.days_until_expiry} dagen"
+                f"Certificate expires within {ssl.days_until_expiry} days"
             )
 
         if weak_points:
             elements.append(Spacer(1, 0.3 * cm))
-            elements.append(Paragraph("<b>Zwakke punten:</b>", self.styles["Body"]))
+            elements.append(Paragraph("<b>Weak points:</b>", self.styles["Body"]))
             for wp in weak_points:
                 elements.append(
                     Paragraph(
@@ -1361,7 +1531,7 @@ class PDFReportGenerator:
         if not admin:
             elements.append(
                 Paragraph(
-                    "<i>Admin-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Admin scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
@@ -1369,17 +1539,17 @@ class PDFReportGenerator:
         # Found admin/login pages
         all_pages = (admin.admin_pages_found or []) + (admin.login_pages_found or [])
         if all_pages:
-            admin_data = [["URL", "Type", "MFA detectie", "Risico"]]
+            admin_data = [["URL", "Type", "MFA detection", "Risk"]]
             for page in all_pages:
                 if isinstance(page, dict):
                     url = page.get("url", page.get("path", str(page)))
                     ptype = page.get("type", page.get("category", "Admin"))
-                    mfa = page.get("mfa", "Niet gedetecteerd")
+                    mfa = page.get("mfa", "Not detected")
                     risk = page.get("risk", "Brute-force, credential stuffing")
                 else:
                     url = str(page)
                     ptype = "Admin/Login"
-                    mfa = "Niet gedetecteerd"
+                    mfa = "Not detected"
                     risk = "Brute-force, credential stuffing"
                 admin_data.append(
                     [Paragraph(str(url), self.styles["BodySmall"]), ptype, mfa, risk]
@@ -1389,7 +1559,7 @@ class PDFReportGenerator:
             )
             admin_table.setStyle(self._detail_table_style(len(admin_data)))
             elements.append(
-                Paragraph("<b>Gevonden admin/login pagina's:</b>", self.styles["Body"])
+                Paragraph("<b>Admin/login pages found:</b>", self.styles["Body"])
             )
             elements.append(admin_table)
 
@@ -1398,7 +1568,7 @@ class PDFReportGenerator:
                 elements.append(Spacer(1, 0.2 * cm))
                 elements.append(
                     Paragraph(
-                        "<b>MFA indicatoren:</b> " + ", ".join(admin.mfa_indicators),
+                        "<b>MFA indicators:</b> " + ", ".join(admin.mfa_indicators),
                         self.styles["Body"],
                     )
                 )
@@ -1413,7 +1583,7 @@ class PDFReportGenerator:
         else:
             elements.append(
                 Paragraph(
-                    "<b>Gevonden admin pagina's:</b> Geen publiek toegankelijke admin/login pagina's gevonden.",
+                    "<b>Admin pages found:</b> No publicly accessible admin/login pages found.",
                     self.styles["Body"],
                 )
             )
@@ -1423,7 +1593,7 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
                 Paragraph(
-                    f"<b>Gecontroleerde paden ({len(admin.pages_checked)}):</b> "
+                    f"<b>Paths checked ({len(admin.pages_checked)}):</b> "
                     f"{', '.join(admin.pages_checked[:20])}"
                     f"{'...' if len(admin.pages_checked) > 20 else ''}",
                     self.styles["BodySmall"],
@@ -1440,17 +1610,17 @@ class PDFReportGenerator:
         if not gov:
             elements.append(
                 Paragraph(
-                    "<i>Governance-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Governance scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
 
         # CISO / Security Officer
         ciso_color = Colors.SUCCESS if gov.has_visible_ciso else Colors.DANGER
-        ciso_text = "Ja" if gov.has_visible_ciso else "Nee"
+        ciso_text = "Yes" if gov.has_visible_ciso else "No"
         elements.append(
             Paragraph(
-                f'<b>CISO/Security Officer zichtbaar:</b> <font color="{ciso_color.hexval()}">{ciso_text}</font>',
+                f'<b>CISO/Security Officer visible:</b> <font color="{ciso_color.hexval()}">{ciso_text}</font>',
                 self.styles["Body"],
             )
         )
@@ -1458,7 +1628,7 @@ class PDFReportGenerator:
         if gov.security_leaders_found:
             elements.append(
                 Paragraph(
-                    "<b>Gevonden security-functies:</b> "
+                    "<b>Security roles found:</b> "
                     + ", ".join(gov.security_leaders_found),
                     self.styles["BodySmall"],
                 )
@@ -1466,7 +1636,7 @@ class PDFReportGenerator:
         if gov.security_titles_found:
             elements.append(
                 Paragraph(
-                    "<b>Gevonden titels:</b> " + ", ".join(gov.security_titles_found),
+                    "<b>Titles found:</b> " + ", ".join(gov.security_titles_found),
                     self.styles["BodySmall"],
                 )
             )
@@ -1475,7 +1645,7 @@ class PDFReportGenerator:
         if gov.pages_checked:
             elements.append(
                 Paragraph(
-                    "<b>Waar gezocht:</b> " + ", ".join(gov.pages_checked[:10]),
+                    "<b>Where checked:</b> " + ", ".join(gov.pages_checked[:10]),
                     self.styles["BodySmall"],
                 )
             )
@@ -1486,7 +1656,7 @@ class PDFReportGenerator:
         if gov.annual_report_found:
             elements.append(
                 Paragraph(
-                    f"<b>Jaarverslag gevonden:</b> Ja"
+                    f"<b>Annual report found:</b> Yes"
                     f"{' — ' + gov.annual_report_url if gov.annual_report_url else ''}"
                     f"{' (' + gov.annual_report_year + ')' if gov.annual_report_year else ''}",
                     self.styles["Body"],
@@ -1494,22 +1664,22 @@ class PDFReportGenerator:
             )
             elements.append(
                 Paragraph(
-                    f"<b>Aantal keer dat cyber/security/risk wordt genoemd:</b> {gov.cyber_mentions_in_report}",
+                    f"<b>Mentions of cyber/security/risk in the report:</b> {gov.cyber_mentions_in_report}",
                     self.styles["BodySmall"],
                 )
             )
         else:
             elements.append(
-                Paragraph("<b>Jaarverslag gevonden:</b> Nee", self.styles["Body"])
+                Paragraph("<b>Annual report found:</b> No", self.styles["Body"])
             )
 
         # NIS2 implication
         elements.append(Spacer(1, 0.3 * cm))
         elements.append(
             Paragraph(
-                f'<font color="{Colors.WARNING.hexval()}"><b>NIS2 implicatie:</b></font> '
-                f"NIS2 vereist bestuursaansprakelijkheid. Zonder zichtbare security governance "
-                f"is onduidelijk wie verantwoordelijk is voor cybersecuritybeleid en incidentrespons.",
+                f'<font color="{Colors.WARNING.hexval()}"><b>NIS2 implication:</b></font> '
+                f"NIS2 expects management accountability. Without visible security governance, "
+                f"it is unclear who owns cybersecurity policy and incident response readiness.",
                 self.styles["Body"],
             )
         )
@@ -1524,7 +1694,7 @@ class PDFReportGenerator:
         if not ts:
             elements.append(
                 Paragraph(
-                    "<i>Tech-stack-scan niet beschikbaar.</i>", self.styles["BodySmall"]
+                    "<i>Tech stack scan not available.</i>", self.styles["BodySmall"]
                 )
             )
             return elements
@@ -1532,18 +1702,23 @@ class PDFReportGenerator:
         # Detected technologies table
         all_tech = (ts.technologies or []) + (ts.outdated_software or [])
         if all_tech:
-            tech_data = [["Software", "Versie", "Status", "Risico"]]
+            tech_data = [["Software", "Version", "Status", "Risk"]]
             seen = set()
             for tech in all_tech:
                 if isinstance(tech, dict):
                     name = tech.get("name", tech.get("software", str(tech)))
                     version = tech.get("version", tech.get("detected_version", ""))
                     status = tech.get("status", "")
+                    status_l = str(status).lower()
+                    if status_l in ("verouderd", "outdated"):
+                        status = "Outdated"
+                    elif status_l in ("actueel", "current"):
+                        status = "Current"
                     risk = tech.get("risk", tech.get("description", ""))
                     # Mark outdated
                     if not status and tech in (ts.outdated_software or []):
-                        status = "Verouderd"
-                        risk = risk or "Bekende kwetsbaarheden mogelijk"
+                        status = "Outdated"
+                        risk = risk or "Known vulnerabilities possible"
                 else:
                     name = str(tech)
                     version = ""
@@ -1553,7 +1728,7 @@ class PDFReportGenerator:
                 if key not in seen:
                     seen.add(key)
                     tech_data.append(
-                        [name, version or "—", status or "Actueel", risk or "—"]
+                        [name, version or "—", status or "Current", risk or "—"]
                     )
 
             if len(tech_data) > 1:
@@ -1567,13 +1742,14 @@ class PDFReportGenerator:
                         if (
                             tech in (ts.outdated_software or [])
                             or "verouderd" in str(tech.get("status", "")).lower()
+                            or "outdated" in str(tech.get("status", "")).lower()
                             or "end-of-life" in str(tech.get("status", "")).lower()
                         ):
                             style.add("TEXTCOLOR", (2, i), (2, i), Colors.DANGER)
                             style.add("FONTNAME", (2, i), (2, i), "Helvetica-Bold")
                 tech_table.setStyle(style)
                 elements.append(
-                    Paragraph("<b>Gedetecteerde software:</b>", self.styles["Body"])
+                    Paragraph("<b>Detected software:</b>", self.styles["Body"])
                 )
                 elements.append(tech_table)
 
@@ -1582,7 +1758,7 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 0.3 * cm))
             elements.append(
                 Paragraph(
-                    "<b>Server headers die versie-informatie lekken:</b>",
+                    "<b>Server headers leaking version information:</b>",
                     self.styles["Body"],
                 )
             )
@@ -1615,9 +1791,177 @@ class PDFReportGenerator:
         if ts.cms_detected:
             elements.append(
                 Paragraph(
-                    f"<b>CMS gedetecteerd:</b> {ts.cms_detected}", self.styles["Body"]
+                    f"<b>CMS detected:</b> {ts.cms_detected}", self.styles["Body"]
                 )
             )
+
+        return elements
+
+    def _appendix_cookies(self, lead: LeadScore) -> List:
+        """Cookies & consent detail block."""
+        elements = []
+        c = lead.cookie_result
+
+        if not c:
+            elements.append(
+                Paragraph("<i>Cookie scan not available.</i>", self.styles["BodySmall"])
+            )
+            return elements
+
+        elements.append(
+            Paragraph(
+                f"<b>Consent banner:</b> {'Yes' if c.consent_banner_detected else 'No'}"
+                + (f" ({c.consent_provider})" if c.consent_provider else ""),
+                self.styles["Body"],
+            )
+        )
+        elements.append(
+            Paragraph(f"<b>Compliance status:</b> {c.compliance_status}", self.styles["Body"])
+        )
+        elements.append(
+            Paragraph(f"<b>Tracking cookies:</b> {len(c.tracking_cookies or [])}", self.styles["Body"])
+        )
+        if c.tracking_cookies:
+            for name in c.tracking_cookies[:25]:
+                elements.append(Paragraph(f"• {name}", self.styles["BodySmall"]))
+            if len(c.tracking_cookies) > 25:
+                elements.append(
+                    Paragraph(f"• ...and {len(c.tracking_cookies) - 25} more", self.styles["BodySmall"])
+                )
+
+        if c.cookies_before_consent:
+            elements.append(Spacer(1, 0.3 * cm))
+            elements.append(Paragraph("<b>Cookies set before consent:</b>", self.styles["Body"]))
+            cookie_data = [["Name", "Domain", "Path", "Attributes"]]
+            for ck in c.cookies_before_consent[:50]:
+                if isinstance(ck, dict):
+                    attrs = []
+                    for k in ("secure", "httponly", "samesite", "expires"):
+                        if k in ck and ck.get(k) not in (None, "", False):
+                            attrs.append(f"{k}={ck.get(k)}")
+                    cookie_data.append(
+                        [
+                            ck.get("name", "—"),
+                            ck.get("domain", "—"),
+                            ck.get("path", "—"),
+                            ", ".join(attrs) or "—",
+                        ]
+                    )
+            tbl = Table(cookie_data, colWidths=[4 * cm, 4 * cm, 2.5 * cm, 4.5 * cm])
+            tbl.setStyle(self._detail_table_style(len(cookie_data)))
+            elements.append(tbl)
+
+        if c.findings:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Scanner findings:</b>", self.styles["Body"]))
+            for f in c.findings[:30]:
+                elements.append(Paragraph(f"• {f}", self.styles["BodySmall"]))
+
+        if c.error:
+            elements.append(
+                Paragraph(f"<b>Error:</b> {c.error}", self.styles["BodySmall"])
+            )
+
+        return elements
+
+    def _appendix_jobs(self, lead: LeadScore) -> List:
+        """Jobs / hiring signals detail block."""
+        elements = []
+        j = lead.jobs_result
+
+        if not j:
+            elements.append(
+                Paragraph("<i>Jobs scan not available.</i>", self.styles["BodySmall"])
+            )
+            return elements
+
+        elements.append(
+            Paragraph(
+                f"<b>Jobs page found:</b> {'Yes' if j.jobs_page_found else 'No'}",
+                self.styles["Body"],
+            )
+        )
+        if j.jobs_page_url:
+            elements.append(Paragraph(f"<b>Jobs page URL:</b> {j.jobs_page_url}", self.styles["BodySmall"]))
+        elements.append(Paragraph(f"<b>Total jobs found:</b> {j.total_jobs_found}", self.styles["Body"]))
+        elements.append(Paragraph(f"<b>Security jobs found:</b> {j.security_jobs_found}", self.styles["Body"]))
+
+        if j.security_job_titles:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Security job titles:</b>", self.styles["Body"]))
+            for t in j.security_job_titles[:25]:
+                elements.append(Paragraph(f"• {t}", self.styles["BodySmall"]))
+
+        if j.security_keywords_found:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Security keywords found:</b>", self.styles["Body"]))
+            elements.append(Paragraph(", ".join(j.security_keywords_found[:50]), self.styles["BodySmall"]))
+
+        if j.pages_checked:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Pages checked:</b>", self.styles["Body"]))
+            for u in j.pages_checked[:20]:
+                elements.append(Paragraph(f"• {u}", self.styles["BodySmall"]))
+            if len(j.pages_checked) > 20:
+                elements.append(Paragraph(f"• ...and {len(j.pages_checked) - 20} more", self.styles["BodySmall"]))
+
+        if j.findings:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Scanner findings:</b>", self.styles["Body"]))
+            for f in j.findings[:30]:
+                elements.append(Paragraph(f"• {f}", self.styles["BodySmall"]))
+
+        if j.error:
+            elements.append(Paragraph(f"<b>Error:</b> {j.error}", self.styles["BodySmall"]))
+
+        return elements
+
+    def _appendix_website(self, lead: LeadScore) -> List:
+        """Website content signals detail block."""
+        elements = []
+        w = lead.website_result
+
+        if not w:
+            elements.append(
+                Paragraph("<i>Website scan not available.</i>", self.styles["BodySmall"])
+            )
+            return elements
+
+        elements.append(Paragraph(f"<b>Pages checked:</b> {len(w.pages_checked or [])}", self.styles["Body"]))
+        if w.pages_found:
+            elements.append(Paragraph("<b>Pages found:</b>", self.styles["Body"]))
+            for p in w.pages_found[:25]:
+                elements.append(Paragraph(f"• {p}", self.styles["BodySmall"]))
+
+        elements.append(Paragraph(f"<b>Security page:</b> {'Yes' if w.has_security_page else 'No'}", self.styles["Body"]))
+        elements.append(Paragraph(f"<b>Privacy page:</b> {'Yes' if w.has_privacy_page else 'No'}", self.styles["Body"]))
+        elements.append(Paragraph(f"<b>Security communication score:</b> {w.security_communication_score}", self.styles["Body"]))
+        elements.append(Paragraph(f"<b>NIS2 readiness score:</b> {w.nis2_readiness_score}", self.styles["Body"]))
+
+        if w.security_keywords_found:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Security keywords found:</b>", self.styles["Body"]))
+            elements.append(Paragraph(", ".join(w.security_keywords_found[:80]), self.styles["BodySmall"]))
+
+        if w.nis2_keywords_found:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>NIS2 keywords found:</b>", self.styles["Body"]))
+            elements.append(Paragraph(", ".join(w.nis2_keywords_found[:80]), self.styles["BodySmall"]))
+
+        if w.sector_indicators:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Sector indicators:</b>", self.styles["Body"]))
+            for k, vals in list(w.sector_indicators.items())[:20]:
+                elements.append(Paragraph(f"• {k}: {', '.join(vals[:20])}", self.styles["BodySmall"]))
+
+        if w.findings:
+            elements.append(Spacer(1, 0.2 * cm))
+            elements.append(Paragraph("<b>Scanner findings:</b>", self.styles["Body"]))
+            for f in w.findings[:30]:
+                elements.append(Paragraph(f"• {f}", self.styles["BodySmall"]))
+
+        if w.error:
+            elements.append(Paragraph(f"<b>Error:</b> {w.error}", self.styles["BodySmall"]))
 
         return elements
 
@@ -1677,7 +2021,7 @@ class PDFReportGenerator:
             6379: "Redis",
             27017: "MongoDB",
         }
-        return common.get(port, f"Poort {port}")
+        return common.get(port, f"Port {port}")
 
     # Helper methods for extracting findings
     def _get_email_findings(self, lead: LeadScore) -> List[str]:
@@ -1825,11 +2169,21 @@ class PDFReportGenerator:
             return "MODERATE RISK - Notable gaps that should be addressed"
         return "LOW RISK - Generally well prepared with minor improvements possible"
 
-    def _get_score_color(self, score: int):
-        """Get color for individual score."""
-        if score == 0:
+    def _get_score_color(self, score: Optional[float], max_score: Optional[float] = None):
+        """Get color for an individual dimension using percentage thresholds."""
+        if score is None:
+            return Colors.TEXT_LIGHT
+        if not max_score:
+            max_score = 2.0
+
+        try:
+            pct = float(score) / float(max_score)
+        except Exception:
+            return Colors.TEXT_LIGHT
+
+        if pct <= 0.33:
             return Colors.DANGER
-        elif score == 1:
+        if pct <= 0.66:
             return Colors.WARNING
         return Colors.SUCCESS
 

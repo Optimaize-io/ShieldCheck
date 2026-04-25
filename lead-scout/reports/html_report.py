@@ -971,7 +971,18 @@ body::after {
     color: var(--text-secondary);
 }
 
-.score-emoji { font-size: 1rem; }
+.score-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-left: 0.5rem;
+    box-shadow: 0 0 0 2px rgba(255,255,255,0.06);
+}
+.score-dot.score-risk { background: var(--hot); }
+.score-dot.score-warning { background: var(--warm); }
+.score-dot.score-ok { background: var(--cool); }
+.score-dot.score-unknown { background: var(--text-muted); }
 
 /* Findings Sections */
 .findings-section {
@@ -1006,6 +1017,47 @@ body::after {
     background: var(--cyan-glow);
     border-left: 3px solid var(--cyan);
     color: var(--text-primary);
+}
+
+/* Dimension Overview (Present vs Missing) */
+.dimension-overview .dimension-block {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    margin-top: var(--space-sm);
+}
+
+.dimension-overview .dimension-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: var(--space-sm);
+    font-weight: 600;
+}
+
+.dimension-overview .dimension-score {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.dimension-overview .dimension-row {
+    margin-bottom: var(--space-sm);
+}
+
+.dimension-overview .dimension-row:last-child {
+    margin-bottom: 0;
+}
+
+.dimension-overview .dimension-row label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    display: block;
+    margin-bottom: var(--space-xs);
 }
 
 /* Technical Details */
@@ -1339,6 +1391,59 @@ body::after {
             
             const body = document.getElementById('modalBody');
             const raw = lead.raw_results || {};
+
+            const dimensionOverviewHtml = (() => {
+                const scores = lead.scores || {};
+                const blocks = Object.entries(scores).map(([key, dim]) => {
+                    if (!dim || dim.analyzed === false) return '';
+                    const present = (dim.present || []).filter(Boolean);
+                    const missing = (dim.missing || []).filter(Boolean);
+                    if (present.length === 0 && missing.length === 0) return '';
+
+                    const name = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                    const scoreText = (typeof dim.score === 'number' && typeof dim.max_score === 'number')
+                        ? `${dim.score}/${dim.max_score}`
+                        : 'N/A';
+
+                    const presentMax = 6;
+                    const missingMax = 10;
+
+                    const presentHtml = present.length > 0
+                        ? present.slice(0, presentMax).map(item => `<span class="tech-tag good">${item}</span>`).join('') +
+                          (present.length > presentMax ? `<span class="tech-tag">+${present.length - presentMax} more</span>` : '')
+                        : `<span class="tech-tag">—</span>`;
+
+                    const missingHtml = missing.length > 0
+                        ? missing.slice(0, missingMax).map(item => `<span class="tech-tag risky">${item}</span>`).join('') +
+                          (missing.length > missingMax ? `<span class="tech-tag risky">+${missing.length - missingMax} more</span>` : '')
+                        : `<span class="tech-tag good">None found</span>`;
+
+                    return `
+                        <div class="dimension-block">
+                            <div class="dimension-header">
+                                <span>${name}</span>
+                                <span class="dimension-score">${scoreText}</span>
+                            </div>
+                            <div class="dimension-row">
+                                <label>Already in place</label>
+                                <div class="tech-tags">${presentHtml}</div>
+                            </div>
+                            <div class="dimension-row">
+                                <label>What needs attention</label>
+                                <div class="tech-tags">${missingHtml}</div>
+                            </div>
+                        </div>
+                    `;
+                }).filter(Boolean).join('');
+
+                if (!blocks) return '';
+                return `
+                    <div class="findings-section dimension-overview">
+                        <h4>✅ Present vs Missing</h4>
+                        ${blocks}
+                    </div>
+                `;
+            })();
             
             const nis2Status = lead.nis2 && lead.nis2.covered 
                 ? `Covered as ${lead.nis2.entity_type} entity in ${lead.nis2.sector}`
@@ -1372,17 +1477,44 @@ body::after {
                     </div>
                 </div>
                 
+                ${lead.key_gaps.length > 0 ? `
+                    <div class="findings-section">
+                        <h4>ðŸš¨ Key Gaps</h4>
+                        ${lead.key_gaps.map(gap => `<div class="finding-item gap">${gap}</div>`).join('')}
+                    </div>
+                ` : ''}
+                
+                ${''}
+                
                 <div class="score-grid">
                     <h4 style="grid-column: 1 / -1; margin-bottom: 0.5rem;">📊 Score Breakdown</h4>
                     ${Object.entries(lead.scores).map(([key, val]) => {
                         const emoji = val.score === 0 ? '🔴' : val.score === 1 ? '🟡' : '🟢';
                         const name = key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                        const analyzed = val.analyzed !== false;
+                        const scoreText = analyzed && typeof val.score === 'number' && typeof val.max_score === 'number' ? `${val.score}/${val.max_score}` : 'N/A';
+                        const status = (() => {
+                            if (!analyzed) return 'unknown';
+                            const s = val.score;
+                            const m = val.max_score;
+                            if (typeof s === 'number' && typeof m === 'number' && m > 0) {
+                                if (s >= m) return 'ok';
+                                if (s > 0) return 'warning';
+                                return 'risk';
+                            }
+                            if (typeof s === 'number') {
+                                if (s <= 0) return 'risk';
+                                if (s === 1) return 'warning';
+                                return 'ok';
+                            }
+                            return 'unknown';
+                        })();
                         return `
                             <div class="score-item">
                                 <div class="score-header">
                                     <span class="score-name">${name}</span>
-                                    <span class="score-value">${val.score}/2</span>
-                                    <span class="score-emoji">${emoji}</span>
+                                    <span class="score-value">${scoreText}</span>
+                                    <span class="score-dot score-${status}"></span>
                                 </div>
                                 <div style="font-size: 0.75rem; color: var(--text-secondary);">${val.description}</div>
                             </div>
@@ -1390,7 +1522,9 @@ body::after {
                     }).join('')}
                 </div>
                 
-                ${lead.key_gaps.length > 0 ? `
+                ${dimensionOverviewHtml}
+                
+                ${false ? `
                     <div class="findings-section">
                         <h4>🚨 Key Gaps</h4>
                         ${lead.key_gaps.map(gap => `<div class="finding-item gap">${gap}</div>`).join('')}
@@ -1457,7 +1591,7 @@ body::after {
                                 </div>
                                 <div class="tech-item">
                                     <label>Indexed in Shodan</label>
-                                    <span class="tech-value">${raw.shodan.not_indexed ? '❌ No (Good!)' : '✅ Yes'}</span>
+                                    <span class="tech-value">${raw.shodan.not_indexed ? '✅ No' : '❌ Yes'}</span>
                                 </div>
                             </div>
                             <div class="tech-subsection">
@@ -1676,6 +1810,192 @@ body::after {
                                 <label>✅ SSO Providers</label>
                                 <div class="tech-tags">
                                     ${raw.admin.sso_providers_detected.map(p => `<span class="tech-tag good">${p}</span>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    <!-- Jobs -->
+                    ${raw.jobs ? `
+                    <div class="tech-section">
+                        <div class="tech-header" onclick="toggleSection(this)">
+                            <span>Security Hiring Signals</span>
+                            <span class="tech-toggle">â–¼</span>
+                        </div>
+                        <div class="tech-content">
+                            <div class="tech-grid">
+                                <div class="tech-item">
+                                    <label>Jobs Page Found</label>
+                                    <span class="tech-value ${raw.jobs.jobs_page_found ? 'good' : 'urgent'}">${raw.jobs.jobs_page_found ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Security Keywords Found</label>
+                                    <span class="tech-value ${raw.jobs.security_jobs_found > 0 ? 'good' : raw.jobs.jobs_page_found ? 'warning' : 'urgent'}">${raw.jobs.security_jobs_found || 0}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Total Listings (approx.)</label>
+                                    <span class="tech-value">${raw.jobs.total_jobs_found || 0}</span>
+                                </div>
+                            </div>
+                            ${raw.jobs.jobs_page_url ? `
+                            <div class="tech-subsection">
+                                <label>Jobs Page</label>
+                                <div class="tech-list">
+                                    <a href="${raw.jobs.jobs_page_url}" target="_blank" class="tech-list-item">${raw.jobs.jobs_page_url}</a>
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.jobs.security_job_titles?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Security Role Matches</label>
+                                <div class="tech-list">
+                                    ${raw.jobs.security_job_titles.map(t => `<div class="tech-list-item">${t}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.jobs.findings?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Findings</label>
+                                <div class="tech-list">
+                                    ${raw.jobs.findings.map(f => `<div class="tech-list-item">${f}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    <!-- Website -->
+                    ${raw.website ? `
+                    <div class="tech-section">
+                        <div class="tech-header" onclick="toggleSection(this)">
+                            <span>Website Signals (Security & NIS2)</span>
+                            <span class="tech-toggle">â–¼</span>
+                        </div>
+                        <div class="tech-content">
+                            <div class="tech-grid">
+                                <div class="tech-item">
+                                    <label>Security Page</label>
+                                    <span class="tech-value ${raw.website.has_security_page ? 'good' : 'warning'}">${raw.website.has_security_page ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Privacy Page</label>
+                                    <span class="tech-value ${raw.website.has_privacy_page ? 'good' : 'warning'}">${raw.website.has_privacy_page ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>NIS2 Keywords</label>
+                                    <span class="tech-value ${raw.website.nis2_keywords_found?.length > 0 ? 'good' : ''}">${raw.website.nis2_keywords_found?.length || 0}</span>
+                                </div>
+                            </div>
+                            ${raw.website.security_keywords_found?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Security Keywords</label>
+                                <div class="tech-tags">
+                                    ${raw.website.security_keywords_found.slice(0, 20).map(k => `<span class="tech-tag">${k}</span>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.website.nis2_keywords_found?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>NIS2 Keywords</label>
+                                <div class="tech-tags">
+                                    ${raw.website.nis2_keywords_found.slice(0, 20).map(k => `<span class="tech-tag good">${k}</span>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.website.sector_indicators && Object.keys(raw.website.sector_indicators).length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Sector Indicators</label>
+                                <div class="tech-list">
+                                    ${Object.entries(raw.website.sector_indicators).map(([sector, kws]) => `<div class="tech-list-item">${sector}: ${(kws || []).slice(0, 6).join(', ')}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.website.findings?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Findings</label>
+                                <div class="tech-list">
+                                    ${raw.website.findings.map(f => `<div class="tech-list-item">${f}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    <!-- Governance -->
+                    ${raw.governance ? `
+                    <div class="tech-section">
+                        <div class="tech-header" onclick="toggleSection(this)">
+                            <span>Governance Signals</span>
+                            <span class="tech-toggle">â–¼</span>
+                        </div>
+                        <div class="tech-content">
+                            <div class="tech-grid">
+                                <div class="tech-item">
+                                    <label>Leadership Page</label>
+                                    <span class="tech-value ${raw.governance.leadership_page_found ? 'good' : 'warning'}">${raw.governance.leadership_page_found ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Visible CISO</label>
+                                    <span class="tech-value ${raw.governance.has_visible_ciso ? 'good' : 'warning'}">${raw.governance.has_visible_ciso ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Annual Report Found</label>
+                                    <span class="tech-value ${raw.governance.annual_report_found ? 'good' : 'warning'}">${raw.governance.annual_report_found ? 'Yes' : 'No'}</span>
+                                </div>
+                                <div class="tech-item">
+                                    <label>Cyber Mentions</label>
+                                    <span class="tech-value">${raw.governance.cyber_mentions_in_report || 0}</span>
+                                </div>
+                            </div>
+                            ${raw.governance.leadership_page_url ? `
+                            <div class="tech-subsection">
+                                <label>Leadership Page</label>
+                                <div class="tech-list">
+                                    <a href="${raw.governance.leadership_page_url}" target="_blank" class="tech-list-item">${raw.governance.leadership_page_url}</a>
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.governance.security_titles_found?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Security Titles Found</label>
+                                <div class="tech-tags">
+                                    ${raw.governance.security_titles_found.map(t => `<span class="tech-tag good">${t}</span>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.governance.security_leaders_found?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Named Leaders Found</label>
+                                <div class="tech-list">
+                                    ${raw.governance.security_leaders_found.map(n => `<div class="tech-list-item">${n}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.governance.annual_report_url ? `
+                            <div class="tech-subsection">
+                                <label>Annual Report</label>
+                                <div class="tech-list">
+                                    <a href="${raw.governance.annual_report_url}" target="_blank" class="tech-list-item">${raw.governance.annual_report_year || ''} ${raw.governance.annual_report_url}</a>
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.governance.risk_keywords_found?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Risk Keywords</label>
+                                <div class="tech-tags">
+                                    ${raw.governance.risk_keywords_found.slice(0, 25).map(k => `<span class="tech-tag">${k}</span>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                            ${raw.governance.findings?.length > 0 ? `
+                            <div class="tech-subsection">
+                                <label>Findings</label>
+                                <div class="tech-list">
+                                    ${raw.governance.findings.map(f => `<div class="tech-list-item">${f}</div>`).join('')}
                                 </div>
                             </div>
                             ` : ''}

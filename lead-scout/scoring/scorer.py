@@ -37,16 +37,52 @@ class ScoreDimension:
     score: int  # 0-2
     max_score: int = 2
     emoji: str = ""
+    analyzed: bool = True
+    status: str = ""  # risk | warning | ok | unknown
     description: str = ""
+    present: List[str] = field(default_factory=list)
+    missing: List[str] = field(default_factory=list)
+    risks: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         """Set emoji based on score."""
+        if not self.analyzed:
+            self.status = "unknown"
+            self.emoji = "?"
+            return
+
+        pct = (self.score / self.max_score) if self.max_score else 0.0
+        if pct <= 0.33:
+            self.status = "risk"
+            self.emoji = "ðŸ”´"
+        elif pct <= 0.66:
+            self.status = "warning"
+            self.emoji = "ðŸŸ¡"
+        else:
+            self.status = "ok"
+            self.emoji = "ðŸŸ¢"
+        return
+
+        self.status = (
+            "risk" if self.score == 0 else "warning" if self.score == 1 else "ok"
+        )
         if self.score == 0:
             self.emoji = "🔴"
         elif self.score == 1:
             self.emoji = "🟡"
         else:
             self.emoji = "🟢"
+    def score_for_total(self, neutral: int = 1) -> int:
+        """Score contribution used in totals; unknown dimensions are neutral by default."""
+        if not self.analyzed:
+            return 0
+        return int(self.score)
+
+    def display_score(self) -> str:
+        """Human-friendly score display."""
+        if not self.analyzed:
+            return "N/A"
+        return f"{self.score}/{self.max_score}"
 
 
 @dataclass
@@ -106,60 +142,47 @@ class LeadScore:
     techstack_result: Optional[TechStackScanResult] = None
     
     def to_dict(self) -> Dict[str, Any]:
+        def dim_to_dict(dim: Optional[ScoreDimension]) -> Dict[str, Any]:
+            if not dim:
+                return {
+                    "score": None,
+                    "max_score": None,
+                    "analyzed": False,
+                    "status": "unknown",
+                    "description": "",
+                    "present": [],
+                    "missing": [],
+                    "risks": [],
+                }
+            return {
+                "score": dim.score if dim.analyzed else None,
+                "max_score": dim.max_score if dim.analyzed else None,
+                "analyzed": dim.analyzed,
+                "status": dim.status,
+                "description": dim.description,
+                "present": list(dim.present),
+                "missing": list(dim.missing),
+                "risks": list(dim.risks),
+            }
+
         return {
             "company_name": self.company_name,
             "domain": self.domain,
             "sector": self.sector,
             "employees": self.employees,
             "scores": {
-                "email_security": {
-                    "score": self.email_security.score if self.email_security else 0,
-                    "description": self.email_security.description if self.email_security else ""
-                },
-                "technical_hygiene": {
-                    "score": self.technical_hygiene.score if self.technical_hygiene else 0,
-                    "description": self.technical_hygiene.description if self.technical_hygiene else ""
-                },
-                "tls_certificate": {
-                    "score": self.tls_certificate.score if self.tls_certificate else 0,
-                    "description": self.tls_certificate.description if self.tls_certificate else ""
-                },
-                "http_headers": {
-                    "score": self.http_headers.score if self.http_headers else 0,
-                    "description": self.http_headers.description if self.http_headers else ""
-                },
-                "cookie_compliance": {
-                    "score": self.cookie_compliance.score if self.cookie_compliance else 0,
-                    "description": self.cookie_compliance.description if self.cookie_compliance else ""
-                },
-                "attack_surface": {
-                    "score": self.attack_surface.score if self.attack_surface else 0,
-                    "description": self.attack_surface.description if self.attack_surface else ""
-                },
-                "tech_stack": {
-                    "score": self.tech_stack.score if self.tech_stack else 0,
-                    "description": self.tech_stack.description if self.tech_stack else ""
-                },
-                "admin_panel": {
-                    "score": self.admin_panel.score if self.admin_panel else 0,
-                    "description": self.admin_panel.description if self.admin_panel else ""
-                },
-                "security_hiring": {
-                    "score": self.security_hiring.score if self.security_hiring else 0,
-                    "description": self.security_hiring.description if self.security_hiring else ""
-                },
-                "security_governance": {
-                    "score": self.security_governance.score if self.security_governance else 0,
-                    "description": self.security_governance.description if self.security_governance else ""
-                },
-                "security_communication": {
-                    "score": self.security_communication.score if self.security_communication else 0,
-                    "description": self.security_communication.description if self.security_communication else ""
-                },
-                "nis2_readiness": {
-                    "score": self.nis2_readiness.score if self.nis2_readiness else 0,
-                    "description": self.nis2_readiness.description if self.nis2_readiness else ""
-                },
+                "email_security": dim_to_dict(self.email_security),
+                "technical_hygiene": dim_to_dict(self.technical_hygiene),
+                "tls_certificate": dim_to_dict(self.tls_certificate),
+                "http_headers": dim_to_dict(self.http_headers),
+                "cookie_compliance": dim_to_dict(self.cookie_compliance),
+                "attack_surface": dim_to_dict(self.attack_surface),
+                "tech_stack": dim_to_dict(self.tech_stack),
+                "admin_panel": dim_to_dict(self.admin_panel),
+                "security_hiring": dim_to_dict(self.security_hiring),
+                "security_governance": dim_to_dict(self.security_governance),
+                "security_communication": dim_to_dict(self.security_communication),
+                "nis2_readiness": dim_to_dict(self.nis2_readiness),
             },
             "total_score": self.total_score,
             "max_score": self.max_score,
@@ -196,7 +219,7 @@ class LeadScorer:
     """
     Aggregates scan results into a comprehensive lead score.
     
-    Scoring dimensions (each 0-2, total 0-18):
+    Scoring dimensions (each 0-2, total 0-24):
     1. Email Security - SPF, DMARC, DKIM
     2. Technical Hygiene - Shodan exposure, CVEs, risky ports
     3. TLS Certificate - Validity, expiry, protocol
@@ -204,13 +227,16 @@ class LeadScorer:
     5. Cookie Compliance - GDPR cookie consent
     6. Attack Surface - Risky subdomains via crt.sh
     7. Tech Stack Hygiene - Outdated software detection
-    8. Security Communication - Website content about security
-    9. NIS2 Readiness - Explicit NIS2/compliance mentions
+    8. Admin Exposure - Admin/login exposure & MFA signals
+    9. Security Hiring - Security job postings signal maturity
+    10. Security Governance - Board/CISO/annual report signals
+    11. Security Communication - Website content about security
+    12. NIS2 Readiness - Explicit NIS2/compliance mentions
     
     Tiers:
-    - HOT: 0-6 (major gaps)
-    - WARM: 7-12 (notable gaps)
-    - COOL: 13-18 (well prepared)
+    - HOT: 0-8 (major gaps)
+    - WARM: 9-16 (notable gaps)
+    - COOL: 17-24 (reasonably prepared)
     """
     
     def __init__(self):
@@ -290,28 +316,29 @@ class LeadScorer:
         lead.nis2_readiness = self._score_nis2_readiness(website_result)
         
         # Calculate total score (raw 0-24)
-        dimension_scores = [
-            lead.email_security.score if lead.email_security else 0,
-            lead.technical_hygiene.score if lead.technical_hygiene else 0,
-            lead.tls_certificate.score if lead.tls_certificate else 0,
-            lead.http_headers.score if lead.http_headers else 0,
-            lead.cookie_compliance.score if lead.cookie_compliance else 0,
-            lead.attack_surface.score if lead.attack_surface else 0,
-            lead.tech_stack.score if lead.tech_stack else 0,
-            lead.admin_panel.score if lead.admin_panel else 0,
-            lead.security_hiring.score if lead.security_hiring else 0,
-            lead.security_governance.score if lead.security_governance else 0,
-            lead.security_communication.score if lead.security_communication else 0,
-            lead.nis2_readiness.score if lead.nis2_readiness else 0,
+        dimensions = [
+            lead.email_security,
+            lead.technical_hygiene,
+            lead.tls_certificate,
+            lead.http_headers,
+            lead.cookie_compliance,
+            lead.attack_surface,
+            lead.tech_stack,
+            lead.admin_panel,
+            lead.security_hiring,
+            lead.security_governance,
+            lead.security_communication,
+            lead.nis2_readiness,
         ]
-        lead.total_score = sum(dimension_scores)  # Raw 0-24 score
-        lead.max_score = 24.0
+        analyzed_dimensions = [d for d in dimensions if d and d.analyzed]
+        lead.total_score = float(sum(d.score for d in analyzed_dimensions))
+        lead.max_score = float(sum(d.max_score for d in analyzed_dimensions))
         
         # Count total findings
         lead.findings_count = self._count_findings(lead)
         
-        # Determine tier (based on 0-18 scale)
-        lead.tier = self._determine_tier(lead.total_score)
+        # Determine tier (based on 0-24 scale)
+        lead.tier = self._determine_tier(lead.total_score, lead.max_score)
         
         # NIS2 classification
         self._classify_nis2(lead, website_result)
@@ -365,25 +392,48 @@ class LeadScorer:
         if not dns_result:
             return ScoreDimension(
                 name="Email Security",
-                score=0,
-                description="Could not check email security"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (DNS scan failed or timed out)"
             )
         
-        # Average of SPF, DMARC, DKIM (each 0-2)
-        avg = (dns_result.spf_score + dns_result.dmarc_score + dns_result.dkim_score) / 3
-        score = round(avg)
-        
-        if score == 0:
-            desc = "Poor email protection"
-        elif score == 1:
-            desc = "Partial email protection"
+        max_score = 3
+        score = 0
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        if dns_result.spf_score == 2:
+            score += 1
+            present.append("SPF policy present and strict")
         else:
-            desc = "Strong email protection"
-        
+            missing.append("SPF missing or weak")
+            risks.append("Without SPF, spoofed email from the domain is harder to block by recipients.")
+
+        if dns_result.dmarc_score == 2:
+            score += 1
+            present.append("DMARC enforcement enabled (reject/quarantine)")
+        else:
+            missing.append("DMARC missing or not enforced")
+            risks.append("Without DMARC enforcement, attackers can more easily impersonate the domain in phishing.")
+
+        if dns_result.dkim_score == 2:
+            score += 1
+            present.append("DKIM signing configured")
+        else:
+            missing.append("DKIM missing or incomplete")
+            risks.append("Without DKIM, recipients cannot verify that outbound mail was not tampered with.")
+
+        desc = f"{score}/{max_score} email authentication controls at best-practice level"
+
         return ScoreDimension(
             name="Email Security",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_technical_hygiene(self, shodan_result: Optional[ShodanScanResult]) -> ScoreDimension:
@@ -391,26 +441,60 @@ class LeadScorer:
         if not shodan_result:
             return ScoreDimension(
                 name="Technical Hygiene",
-                score=2,  # Assume good if we can't check
-                description="Could not verify (assumed good)"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (Shodan scan failed or timed out)"
             )
-        
-        score = shodan_result.score
-        
-        if score == 0:
-            desc = f"Critical issues: {len(shodan_result.vulns)} CVEs, {len(shodan_result.risky_ports)} risky ports"
-        elif score == 1:
-            desc = "Some exposure concerns"
+
+        max_score = 3
+        score = 0
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        # 1) Vulnerabilities
+        if not shodan_result.vulns:
+            score += 1
+            present.append("No known CVEs visible via Shodan InternetDB")
         else:
-            if shodan_result.not_indexed:
-                desc = "Low internet exposure"
+            missing.append(f"{len(shodan_result.vulns)} known vulnerability identifier(s) exposed")
+            risks.append("Known vulnerabilities on internet-facing systems increase breach likelihood and urgency.")
+
+        # 2) High-risk ports
+        high_risk_ports = {21, 23, 445, 3389, 5900, 27017, 6379}
+        high_risk_found = [p for p in (shodan_result.risky_ports or []) if p in high_risk_ports]
+        if not high_risk_found:
+            score += 1
+            present.append("No high-risk ports detected (e.g., RDP/SMB/Telnet)")
+        else:
+            shown = ", ".join(str(p) for p in sorted(high_risk_found)[:5])
+            more = f" (+{len(high_risk_found) - 5} more)" if len(high_risk_found) > 5 else ""
+            missing.append(f"High-risk ports exposed: {shown}{more}")
+            risks.append("Exposed remote access and file-sharing services are frequently targeted by attackers.")
+
+        # 3) Overall internet exposure
+        if shodan_result.not_indexed:
+            score += 1
+            present.append("Not indexed in Shodan InternetDB (lower observed exposure)")
+        else:
+            port_count = len(shodan_result.ports or [])
+            if port_count <= 5:
+                score += 1
+                present.append(f"Limited exposed services ({port_count} open port(s))")
             else:
-                desc = "Clean internet profile"
-        
+                missing.append(f"Many exposed services ({port_count} open port(s))")
+                risks.append("More exposed services increases the attack surface and the chance of misconfiguration.")
+
+        desc = " ; ".join(missing[:2]) if missing else "Low internet exposure indicators"
+
         return ScoreDimension(
             name="Technical Hygiene",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_tls_certificate(self, ssl_result: Optional[SSLScanResult]) -> ScoreDimension:
@@ -418,26 +502,62 @@ class LeadScorer:
         if not ssl_result:
             return ScoreDimension(
                 name="TLS Certificate",
-                score=0,
-                description="Could not verify SSL"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (TLS scan failed or timed out)"
             )
-        
-        score = ssl_result.score
-        
-        if score == 0:
-            if ssl_result.days_until_expiry is not None and ssl_result.days_until_expiry < 30:
-                desc = f"Expires in {ssl_result.days_until_expiry} days"
-            else:
-                desc = "Invalid or missing certificate"
-        elif score == 1:
-            desc = f"Valid but expiring in {ssl_result.days_until_expiry} days"
+
+        max_score = 3
+        score = 0
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        if ssl_result.certificate_valid:
+            score += 1
+            present.append("Valid TLS certificate")
         else:
-            desc = f"Valid certificate ({ssl_result.protocol_version})"
-        
+            missing.append("No valid TLS certificate (browser trust may fail)")
+            risks.append("Invalid TLS can block users and enables interception warnings that reduce trust.")
+            return ScoreDimension(
+                name="TLS Certificate",
+                score=0,
+                max_score=max_score,
+                description="No valid TLS certificate",
+                present=present,
+                missing=missing,
+                risks=risks,
+            )
+
+        # Expiry hygiene
+        if ssl_result.days_until_expiry is None:
+            missing.append("Certificate expiry could not be determined")
+        elif ssl_result.days_until_expiry >= 90:
+            score += 1
+            present.append(f"Certificate validity window is healthy ({ssl_result.days_until_expiry} days left)")
+        else:
+            missing.append(f"Certificate expires soon ({ssl_result.days_until_expiry} days left)")
+            risks.append("Expiring certificates can cause outages and loss of trust if renewal fails.")
+
+        # Protocol
+        proto = (ssl_result.protocol_version or "").lower()
+        if "tlsv1.3" in proto or "tlsv1.2" in proto:
+            score += 1
+            present.append(f"Modern TLS protocol in use ({ssl_result.protocol_version})")
+        else:
+            missing.append(f"Outdated TLS protocol detected ({ssl_result.protocol_version or 'unknown'})")
+            risks.append("Older TLS versions can be incompatible and may expose weaker cryptography.")
+
+        desc = "; ".join(missing[:2]) if missing else f"Strong TLS configuration ({ssl_result.protocol_version})"
+
         return ScoreDimension(
             name="TLS Certificate",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_http_headers(self, headers_result: Optional[HeadersScanResult]) -> ScoreDimension:
@@ -445,24 +565,53 @@ class LeadScorer:
         if not headers_result:
             return ScoreDimension(
                 name="HTTP Headers",
-                score=1,  # Neutral if we couldn't check
-                description="Could not analyze headers"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (headers scan failed or timed out)"
             )
         
-        score = headers_result.score
+        max_score = 6
+        score = int(headers_result.headers_score)
         grade = headers_result.grade
-        
-        if score == 0:
-            desc = f"Grade {grade} - Poor security headers"
-        elif score == 1:
-            desc = f"Grade {grade} - Partial headers"
+
+        header_help = {
+            "Strict-Transport-Security": "forces HTTPS and prevents downgrade attacks",
+            "Content-Security-Policy": "reduces XSS/injection impact by restricting content sources",
+            "X-Content-Type-Options": "prevents content-type sniffing",
+            "X-Frame-Options": "reduces clickjacking risk",
+            "Referrer-Policy": "limits referrer data leakage",
+            "Permissions-Policy": "limits risky browser features",
+        }
+        header_risks = {
+            "Strict-Transport-Security": "Without HSTS, visitors can be downgraded to insecure HTTP on hostile networks.",
+            "Content-Security-Policy": "Without CSP, a single injected script can more easily steal sessions or redirect visitors.",
+            "X-Content-Type-Options": "Without this header, browsers may interpret files as executable content in edge cases.",
+            "X-Frame-Options": "Without this header, the site can be embedded and used in clickjacking scenarios.",
+        }
+
+        present = [f"{h} enabled" for h in sorted(headers_result.headers_present.keys())]
+        missing = [
+            f"{h} missing ({header_help.get(h, 'security hardening')})"
+            for h in headers_result.headers_missing
+        ]
+        risks = [header_risks[h] for h in headers_result.headers_missing if h in header_risks]
+
+        if headers_result.headers_missing:
+            short_missing = ", ".join(headers_result.headers_missing[:3])
+            if len(headers_result.headers_missing) > 3:
+                short_missing += f" (+{len(headers_result.headers_missing) - 3} more)"
+            desc = f"Grade {grade} — missing {len(headers_result.headers_missing)}/{max_score} headers ({short_missing})"
         else:
-            desc = f"Grade {grade} - Good security headers"
-        
+            desc = f"Grade {grade} — all {max_score}/{max_score} headers present"
+
         return ScoreDimension(
             name="HTTP Headers",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_cookie_compliance(self, cookie_result: Optional[CookieScanResult]) -> ScoreDimension:
@@ -470,24 +619,53 @@ class LeadScorer:
         if not cookie_result:
             return ScoreDimension(
                 name="Cookie Compliance",
-                score=1,  # Neutral if we couldn't check
-                description="Could not analyze cookies"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (cookie scan failed or timed out)"
             )
         
-        score = cookie_result.score
-        
-        if score == 0:
-            num_trackers = len(cookie_result.tracking_cookies)
-            desc = f"Tracking without consent ({num_trackers} cookies)"
-        elif score == 1:
-            desc = "Banner present but cookies leak"
+        max_score = 4
+        score = 0
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        # Point 1/4: Consent banner / explicit consent flow
+        if cookie_result.consent_banner_detected:
+            provider = cookie_result.consent_provider or "consent provider detected"
+            present.append(f"Consent banner detected ({provider})")
+            score += 1
         else:
-            desc = "GDPR compliant cookies"
-        
+            missing.append("Consent banner not detected (consent flow unclear)")
+            risks.append(
+                "If tracking starts without a clear consent choice, this can create GDPR/ePrivacy exposure and reputational risk."
+            )
+
+        # Points 2-4/4: Tracking should not start before consent (3 slots)
+        trackers = list(cookie_result.tracking_cookies or [])
+        for i in range(3):
+            if i < len(trackers):
+                missing.append(f"Tracking cookie set before consent: {trackers[i]}")
+                if not risks:
+                    risks.append(
+                        "Tracking before consent can lead to complaints, fines, and reduced visitor trust."
+                    )
+            else:
+                present.append(f"No tracking cookie set before consent (check {i+1}/3)")
+                score += 1
+
+        score = max(0, min(max_score, score))
+        extra = f" (+{len(trackers) - 3} more)" if len(trackers) > 3 else ""
+        desc = f"{cookie_result.compliance_status}: {len(trackers)} tracking cookie(s) before consent{extra}"
+
         return ScoreDimension(
             name="Cookie Compliance",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_attack_surface(self, subdomain_result: Optional[SubdomainScanResult]) -> ScoreDimension:
@@ -495,27 +673,44 @@ class LeadScorer:
         if not subdomain_result:
             return ScoreDimension(
                 name="Attack Surface",
-                score=1,  # Neutral if we couldn't check
-                description="Could not check subdomains"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (subdomain scan failed or timed out)"
             )
         
-        score = subdomain_result.score
+        max_score = 4
         risky_count = len(subdomain_result.risky_subdomains)
-        
-        if score == 0:
-            desc = f"{risky_count} risky subdomains exposed"
-        elif score == 1:
-            desc = f"{risky_count} potentially risky subdomains"
-        else:
-            if subdomain_result.total_count == 0:
-                desc = "No subdomains found"
+        score = max(0, max_score - min(max_score, risky_count))
+
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        # Map the 4 points to the top 4 risky subdomain candidates.
+        top = list(subdomain_result.risky_subdomains or [])[:4]
+        for i in range(4):
+            if i < len(top):
+                item = top[i] or {}
+                missing.append(
+                    f"Risky subdomain exposed: {item.get('subdomain')} ({item.get('reason')})"
+                )
+                if not risks:
+                    risks.append(
+                        "Test/staging/admin subdomains are often less protected and can be used as an entry point."
+                    )
             else:
-                desc = f"Clean attack surface ({subdomain_result.total_count} subdomains)"
-        
+                present.append(f"No additional risky subdomain found (check {i+1}/4)")
+
+        desc = f"{risky_count} risky subdomain(s) (out of {subdomain_result.total_count} discovered)"
+
         return ScoreDimension(
             name="Attack Surface",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_tech_stack(self, techstack_result: Optional[TechStackScanResult]) -> ScoreDimension:
@@ -523,30 +718,54 @@ class LeadScorer:
         if not techstack_result:
             return ScoreDimension(
                 name="Tech Stack",
-                score=1,  # Neutral if we couldn't check
-                description="Could not analyze tech stack"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (tech stack scan failed or timed out)"
             )
         
-        score = techstack_result.score
-        
-        if score == 0:
-            num_outdated = len(techstack_result.outdated_software)
-            desc = f"Outdated software ({num_outdated} issues)"
-        elif score == 1:
-            if techstack_result.version_leaks:
-                desc = "Version info leaked"
+        max_score = 4
+        score = 4
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        # Points 1-3/4: Outdated components (3 slots)
+        outdated = list(techstack_result.outdated_software or [])
+        for i in range(3):
+            if i < len(outdated):
+                item = outdated[i] or {}
+                sw = item.get("software", "Software")
+                ver = item.get("version", "").strip()
+                issue = item.get("issue", "outdated")
+                missing.append(f"Outdated component: {sw}{(' ' + ver) if ver else ''} ({issue})")
             else:
-                desc = "Minor tech hygiene issues"
+                present.append(f"No additional outdated component detected (check {i+1}/3)")
+
+        score -= min(3, len(outdated))
+        if len(outdated) > 0:
+            risks.append("Outdated components are a common source of known vulnerabilities and successful attacks.")
+
+        # Point 4/4: Version leakage
+        if techstack_result.version_leaks:
+            score -= 1
+            missing.append("Server/software versions are exposed via headers (makes targeting easier)")
+            if len(risks) < 2:
+                risks.append("Version leakage helps attackers focus on known exploits for specific software versions.")
         else:
-            if techstack_result.cms_detected:
-                desc = f"Modern stack ({techstack_result.cms_detected})"
-            else:
-                desc = "Clean tech stack"
-        
+            present.append("No obvious version leakage via headers")
+
+        score = max(0, score)
+        cms = f" (CMS: {techstack_result.cms_detected})" if techstack_result.cms_detected else ""
+        desc = "; ".join(missing[:2]) + cms if missing else f"No major tech stack hygiene gaps detected{cms}"
+
         return ScoreDimension(
             name="Tech Stack",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_security_communication(self, website_result: Optional[WebsiteScanResult]) -> ScoreDimension:
@@ -554,8 +773,9 @@ class LeadScorer:
         if not website_result:
             return ScoreDimension(
                 name="Security Communication",
-                score=0,
-                description="Could not analyze website"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (website scan failed or timed out)"
             )
         
         score = website_result.security_communication_score
@@ -581,8 +801,9 @@ class LeadScorer:
         if not website_result:
             return ScoreDimension(
                 name="NIS2 Readiness",
-                score=0,
-                description="Could not analyze website"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (website scan failed or timed out)"
             )
         
         score = website_result.nis2_readiness_score
@@ -605,24 +826,52 @@ class LeadScorer:
         if not jobs_result:
             return ScoreDimension(
                 name="Security Hiring",
-                score=1,  # Neutral if we couldn't check
-                description="Could not analyze job postings"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (jobs scan failed or timed out)"
             )
         
-        score = jobs_result.score
-        
+        max_score = 2
+        score = int(jobs_result.score or 0)
+
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        # Point 1/2: Careers/jobs page discoverable
+        if jobs_result.jobs_page_found:
+            present.append("Careers/jobs page found")
+        else:
+            missing.append("No careers/jobs page found (hard to verify hiring signals)")
+            risks.append("Without clear hiring visibility, it's harder to demonstrate security capacity and maturity.")
+
+        # Point 2/2: Security roles visible
+        if (jobs_result.security_jobs_found or 0) > 0:
+            count = int(jobs_result.security_jobs_found or 0)
+            present.append(f"Security hiring visible ({count} role{'s' if count != 1 else ''})")
+        else:
+            missing.append("No security roles visible on the careers pages checked")
+            if not risks:
+                risks.append("Limited visible security staffing can slow improvements and incident response readiness.")
+
+        # Keep the existing 0/1/2 score semantics but ensure max_score and findings exist.
+        score = max(0, min(max_score, score))
+
         if score == 0:
             desc = "No jobs page found"
         elif score == 1:
-            desc = "Jobs page but no security roles"
+            desc = "Jobs page found, but no security roles visible"
         else:
-            count = jobs_result.security_jobs_found
-            desc = f"Hiring security staff ({count} role{'s' if count > 1 else ''})"
+            desc = "Security hiring visible on careers pages"
         
         return ScoreDimension(
             name="Security Hiring",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
     def _score_security_leadership(self, governance_result: Optional[GovernanceScanResult]) -> ScoreDimension:
@@ -630,8 +879,9 @@ class LeadScorer:
         if not governance_result:
             return ScoreDimension(
                 name="Security Leadership",
-                score=1,  # Neutral if we couldn't check
-                description="Could not analyze governance"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (governance scan failed or timed out)"
             )
         
         # Combine leadership and report scores
@@ -665,43 +915,57 @@ class LeadScorer:
         if not admin_result:
             return ScoreDimension(
                 name="Admin Exposure",
-                score=1,  # Neutral if we couldn't check  
-                description="Could not analyze admin exposure"
+                score=1,
+                analyzed=False,
+                description="Not analyzed (admin scan failed or timed out)"
             )
         
-        score = admin_result.score
-        
+        max_score = 4
         total_found = len(admin_result.admin_pages_found) + len(admin_result.login_pages_found)
-        
-        if score == 0:
-            desc = f"{total_found} admin page(s) without MFA"
-        elif score == 1:
-            if admin_result.mfa_indicators:
-                desc = f"Admin pages with partial MFA ({', '.join(admin_result.mfa_indicators[:2])})"
-            else:  
-                desc = "Some admin pages detected"
+        exposed = int(admin_result.exposed_without_mfa or 0)
+
+        score = max(0, max_score - min(max_score, exposed))
+        present: List[str] = []
+        missing: List[str] = []
+        risks: List[str] = []
+
+        if total_found == 0:
+            present.append("No common admin/login endpoints responded")
         else:
-            if admin_result.sso_providers_detected:
-                desc = f"Protected with {', '.join(admin_result.sso_providers_detected[:2])}"
-            elif total_found == 0:
-                desc = "No exposed admin pages"
-            else:
-                desc = "Admin pages properly secured"
-        
+            present.append(f"{total_found} admin/login endpoint(s) responded")
+
+        if admin_result.sso_providers_detected:
+            present.append("SSO/MFA indicators: " + ", ".join(admin_result.sso_providers_detected[:3]))
+
+        if exposed > 0:
+            missing.append(f"{exposed} endpoint(s) exposed without clear MFA/SSO protection")
+            risks.append("Admin and login endpoints are high-value targets and are frequently abused for credential attacks.")
+        else:
+            present.append("No endpoints flagged as exposed without MFA")
+
+        desc = "; ".join(missing[:2]) if missing else "No obvious exposed admin/login risk detected"
+
         return ScoreDimension(
             name="Admin Exposure",
             score=score,
-            description=desc
+            max_score=max_score,
+            description=desc,
+            present=present,
+            missing=missing,
+            risks=risks,
         )
     
-    def _determine_tier(self, total_score: float) -> LeadTier:
-        """Determine lead tier from total score (0-24 scale)."""
-        if total_score <= 8:
-            return LeadTier.HOT
-        elif total_score <= 14:
+    def _determine_tier(self, total_score: float, max_score: float) -> LeadTier:
+        """Determine lead tier from score percentage (lower = more gaps)."""
+        if max_score <= 0:
             return LeadTier.WARM
-        else:
-            return LeadTier.COOL
+
+        pct = total_score / max_score
+        if pct <= 0.45:
+            return LeadTier.HOT
+        elif pct <= 0.75:
+            return LeadTier.WARM
+        return LeadTier.COOL
     
     def _classify_nis2(self, lead: LeadScore, website_result: Optional[WebsiteScanResult]) -> None:
         """Classify company under NIS2."""
@@ -730,175 +994,65 @@ class LeadScorer:
     
     def _identify_key_gaps(self, lead: LeadScore) -> List[str]:
         """Identify key security gaps for sales messaging."""
-        gaps = []
-        
-        # Email security gaps
-        if lead.email_security and lead.email_security.score == 0:
-            if lead.dns_result:
-                if lead.dns_result.dmarc_score == 0:
-                    gaps.append(f"No DMARC - email spoofing of @{lead.domain} possible")
-                if lead.dns_result.spf_score == 0:
-                    gaps.append("Missing SPF record")
-        
-        # Technical gaps
-        if lead.technical_hygiene and lead.technical_hygiene.score == 0:
-            if lead.shodan_result:
-                if lead.shodan_result.vulns:
-                    gaps.append(f"{len(lead.shodan_result.vulns)} known CVEs detected")
-                for port, desc in lead.shodan_result.risky_ports_detail.items():
-                    if port in {23, 3389, 5900, 445}:
-                        gaps.append(f"Port {port} open: {desc.split(' - ')[0]}")
-        
-        # SSL gaps
-        if lead.tls_certificate and lead.tls_certificate.score == 0:
-            if lead.ssl_result and lead.ssl_result.days_until_expiry is not None:
-                if lead.ssl_result.days_until_expiry < 0:
-                    gaps.append("SSL certificate EXPIRED")
-                elif lead.ssl_result.days_until_expiry < 30:
-                    gaps.append(f"SSL expires in {lead.ssl_result.days_until_expiry} days")
-        
-        # HTTP Headers gaps
-        if lead.http_headers and lead.http_headers.score == 0:
-            if lead.headers_result:
-                missing = lead.headers_result.headers_missing[:3]
-                gaps.append(f"Missing security headers: {', '.join(missing)}")
-        
-        # Cookie compliance gaps
-        if lead.cookie_compliance and lead.cookie_compliance.score == 0:
-            if lead.cookie_result:
-                gaps.append(f"GDPR violation: {len(lead.cookie_result.tracking_cookies)} tracking cookies without consent")
-        
-        # Attack surface gaps
-        if lead.attack_surface and lead.attack_surface.score == 0:
-            if lead.subdomain_result:
-                risky = [s['subdomain'] for s in lead.subdomain_result.risky_subdomains[:3]]
-                gaps.append(f"Risky subdomains exposed: {', '.join(risky)}")
-        
-        # Tech stack gaps
-        if lead.tech_stack and lead.tech_stack.score == 0:
-            if lead.techstack_result and lead.techstack_result.outdated_software:
-                sw = lead.techstack_result.outdated_software[0]
-                gaps.append(f"Outdated software: {sw['software']} {sw['version']}")
-        
-        # NIS2 gaps
-        if lead.nis2_readiness and lead.nis2_readiness.score == 0:
-            if lead.nis2_covered:
-                gaps.append("NIS2 covered but no compliance mentioned")
-        
-        return gaps
+        candidates: List[tuple[int, str]] = []
+
+        for dim_name, dim in self._get_all_dimensions(lead):
+            if not dim or not dim.analyzed:
+                continue
+            for msg in dim.missing:
+                pr = 50
+                if "Content-Security-Policy" in msg:
+                    pr = 10
+                elif "Strict-Transport-Security" in msg:
+                    pr = 11
+                elif "expires" in msg.lower():
+                    pr = 12
+                elif "DMARC" in msg:
+                    pr = 13
+                elif "High-risk ports" in msg:
+                    pr = 14
+                elif msg.lower().startswith("outdated software"):
+                    pr = 20
+                elif "Tracking cookies" in msg:
+                    pr = 30
+                candidates.append((pr, f"{dim_name}: {msg}"))
+
+        candidates.sort(key=lambda x: x[0])
+        return [m for _, m in candidates[:5]]
     
     def _generate_sales_angles(self, lead: LeadScore) -> List[str]:
         """Generate specific sales approach recommendations."""
-        angles = []
-        
-        # Email spoofing angle
-        if lead.dns_result and lead.dns_result.dmarc_score == 0:
+        angles: List[str] = []
+
+        suggestions = {
+            "HTTP Headers": "Implement missing security headers using a standard hardening baseline and validate after deployment.",
+            "TLS Certificate": "Automate certificate renewal and set up expiry monitoring alerts.",
+            "Email Security": "Roll out SPF/DKIM/DMARC enforcement in stages (monitor â†’ quarantine â†’ reject).",
+            "Cookie Compliance": "Block tracking until consent and document the consent mechanism for auditability.",
+            "Attack Surface": "Restrict or remove risky subdomains; unused endpoints should be decommissioned.",
+            "Technical Hygiene": "Reduce exposed services and prioritize patching of any known vulnerabilities.",
+            "Tech Stack": "Patch/upgrade outdated components and reduce version leakage in headers.",
+            "Admin Exposure": "Protect admin/login endpoints behind SSO/MFA and add rate limiting.",
+        }
+
+        for dim_name, dim in self._get_all_dimensions(lead):
+            if not dim or not dim.analyzed or not dim.missing:
+                continue
+            present = dim.present[0] if dim.present else "Some controls present"
+            missing = dim.missing[0]
+            risk = dim.risks[0] if dim.risks else "This increases security and compliance risk."
+            next_step = suggestions.get(dim_name, "Address the missing controls and re-validate the posture.")
             angles.append(
-                f"Lead with email security: anyone can spoof @{lead.domain} today. "
-                "Demonstrate with a test phishing email mock-up."
+                f"{dim_name}: Present: {present}. Missing: {missing}. Risk: {risk} Next step: {next_step}"
             )
-        
-        # Critical vulnerabilities angle
-        if lead.shodan_result and lead.shodan_result.vulns:
-            num_vulns = len(lead.shodan_result.vulns)
-            if num_vulns > 5:
-                angles.append(
-                    f"Open with vulnerability report: {num_vulns} known CVEs on internet-facing systems. "
-                    "Urgency is high - these are actively exploited."
-                )
-        
-        # RDP/VNC angle
-        if lead.shodan_result:
-            for port in lead.shodan_result.risky_ports:
-                if port == 3389:
-                    angles.append(
-                        "RDP port 3389 is open externally - this is a ransomware attack vector. "
-                        "Start conversation with incident statistics."
-                    )
-                    break
-                elif port == 5900:
-                    angles.append(
-                        "VNC port exposed - common attack vector. "
-                        "Discuss remote access security."
-                    )
-                    break
-        
-        # Board liability angle (NIS2)
-        if lead.nis2_covered and lead.nis2_readiness and lead.nis2_readiness.score == 0:
-            if lead.employees >= 500:
-                angles.append(
-                    f"{lead.employees:,} employees in {lead.sector}, zero NIS2 mentions. "
-                    "Board liability angle: directors are personally liable under Cyberbeveiligingswet."
-                )
-            else:
-                angles.append(
-                    f"NIS2-covered {lead.sector} company without visible compliance program. "
-                    "Offer NIS2 readiness assessment."
-                )
-        
-        # Supply chain angle
-        if lead.sector and any(x in lead.sector.lower() for x in ['supplier', 'manufacturing', 'production', 'food']):
-            angles.append(
-                "Supply chain security: their customers will audit them under NIS2. "
-                "Proactive compliance is a competitive advantage."
-            )
-        
-        # Expiring SSL angle
-        if lead.ssl_result and lead.ssl_result.days_until_expiry is not None:
-            if 0 < lead.ssl_result.days_until_expiry < 30:
-                angles.append(
-                    f"Certificate expires in {lead.ssl_result.days_until_expiry} days - "
-                    "offer to help with certificate management."
-                )
-        
-        # GDPR/Cookie compliance angle
-        if lead.cookie_result and lead.cookie_result.score == 0:
-            trackers = len(lead.cookie_result.tracking_cookies)
-            angles.append(
-                f"GDPR violation: {trackers} tracking cookies without consent. "
-                "Data privacy risk - offer compliance assessment."
-            )
-        
-        # Security headers angle
-        if lead.headers_result and lead.headers_result.score == 0:
-            angles.append(
-                f"Security headers grade {lead.headers_result.grade} - easy quick win. "
-                "Offer hardening assessment and implementation."
-            )
-        
-        # Risky subdomains angle  
-        if lead.subdomain_result and lead.subdomain_result.risky_count >= 3:
-            angles.append(
-                f"{lead.subdomain_result.risky_count} risky subdomains exposed (staging, dev, admin). "
-                "Attack surface reduction opportunity."
-            )
-        
-        # Outdated tech stack angle
-        if lead.techstack_result and lead.techstack_result.outdated_software:
-            sw = lead.techstack_result.outdated_software[0]
-            angles.append(
-                f"Running outdated {sw['software']} - vulnerability remediation opportunity. "
-                "Position as managed patching/upgrade service."
-            )
-        
-        # Default angle if we have nothing specific
+            if len(angles) >= 3:
+                break
+
         if not angles:
-            if lead.tier == LeadTier.HOT:
-                angles.append(
-                    "Multiple security gaps identified. Position as proactive security assessment "
-                    "before they become incidents."
-                )
-            elif lead.tier == LeadTier.WARM:
-                angles.append(
-                    "Some gaps exist. Position as security maturity acceleration - "
-                    "help them reach best practice faster."
-                )
-            else:
-                angles.append(
-                    "Already well-prepared. Position as continuous improvement partner "
-                    "or second opinion on current security posture."
-                )
-        
+            angles.append(
+                "No high-signal gaps detected in this scan; propose a short assessment to confirm the current posture and improvements."
+            )
+
         return angles
 
     def _generate_detailed_gaps(self, lead: LeadScore) -> List[Dict[str, str]]:
@@ -1068,6 +1222,7 @@ class LeadScorer:
         all_dims = self._get_all_dimensions(lead)
         red_count = sum(1 for _, dim in all_dims if dim and dim.score == 0)
         total_dims = len(all_dims)
+        analyzed_dims = sum(1 for _, dim in all_dims if dim and dim.analyzed)
 
         # Build top risks description
         top_risks = []
@@ -1099,7 +1254,7 @@ class LeadScorer:
 
         summary = (
             f"De externe security posture van {lead.company_name} scoort {score_int} van {max_int} punten "
-            f"over {total_dims} dimensies, wat wijst op "
+            f"over {total_dims} dimensies (waarvan {analyzed_dims} geanalyseerd), wat wijst op "
         )
 
         if lead.tier == LeadTier.HOT:
