@@ -101,8 +101,18 @@ class HTMLReportGenerator:
     ) -> str:
         """Generate the complete HTML document with Dark Ops theme."""
         
-        # Serialize leads data for JavaScript
-        leads_json = json.dumps(leads_data, indent=2, ensure_ascii=False)
+        # Serialize leads data for JavaScript.
+        # Keep the HTML report lean by not embedding full raw scan results (the PDF is the technical deep-dive).
+        sanitized_leads = []
+        for lead in leads_data:
+            if isinstance(lead, dict):
+                d = dict(lead)
+                d.pop("raw_results", None)
+                sanitized_leads.append(d)
+            else:
+                sanitized_leads.append(lead)
+
+        leads_json = json.dumps(sanitized_leads, indent=2, ensure_ascii=False)
         
         # Calculate sector distribution
         sector_counts = {}
@@ -663,6 +673,25 @@ body::after {
     cursor: pointer;
     transition: all 0.2s ease;
     border: 1px solid var(--border-default);
+}
+
+a.btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.btn-primary {
+    background: var(--cyan);
+    color: var(--text-inverse);
+    border-color: rgba(0, 225, 255, 0.35);
+}
+
+.btn-primary:hover {
+    background: #00c6e1;
+    border-color: var(--cyan);
+    box-shadow: 0 0 0 3px var(--cyan-glow);
 }
 
 .btn-secondary {
@@ -1391,6 +1420,8 @@ body::after {
             
             const body = document.getElementById('modalBody');
             const raw = lead.raw_results || {};
+            const pdfFilename = 'security_report_' + String(lead.domain || '').replace(/\\./g, '_') + '.pdf';
+            const pdfHref = 'pdfs/' + pdfFilename;
 
             const dimensionOverviewHtml = (() => {
                 const scores = lead.scores || {};
@@ -2004,6 +2035,20 @@ body::after {
                     ` : ''}
                 </div>
             `;
+
+            // The PDF report contains the full deep-dive technical details; keep the HTML modal lean.
+            const tech = body.querySelector('.technical-details');
+            if (tech) {
+                tech.innerHTML = `
+                    <h4 style="margin-top: 1.5rem; margin-bottom: 1rem;">🔬 Technical Overview</h4>
+                    <div class="tech-subsection" style="margin-top: 0;">
+                        <label>Download PDF</label>
+                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                            <a class="btn btn-primary" href="${pdfHref}" target="_blank" rel="noopener">Download PDF</a>
+                        </div>
+                    </div>
+                `;
+            }
             
             modal.classList.add('active');
             document.body.style.overflow = 'hidden';
