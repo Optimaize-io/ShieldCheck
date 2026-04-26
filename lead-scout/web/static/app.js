@@ -8,6 +8,10 @@ let results = [];
 let eventSource = null;
 let reportHtmlPath = null;
 let pdfPaths = {};
+let scanHistoryPage = 1;
+let domainListHistoryPage = 1;
+const HISTORY_PAGE_SIZE = 10;
+let confirmAction = null;
 
 // ─── Clock ───
 function updateClock() {
@@ -30,6 +34,32 @@ function openAddModal() {
 }
 function openUploadModal() {
   openModal("uploadModal");
+}
+
+function openConfirmModal({ title, message, okText, onOk }) {
+  document.getElementById("confirmTitle").textContent = title || "Confirm";
+  const body = document.getElementById("confirmBody");
+  body.textContent = message || "";
+
+  const okBtn = document.getElementById("confirmOkBtn");
+  okBtn.disabled = false;
+  okBtn.textContent = okText || "Confirm";
+
+  confirmAction = async () => {
+    okBtn.disabled = true;
+    okBtn.textContent = "Working...";
+    try {
+      await onOk?.();
+      closeModal("confirmModal");
+    } finally {
+      okBtn.disabled = false;
+      okBtn.textContent = okText || "Confirm";
+      confirmAction = null;
+    }
+  };
+
+  okBtn.onclick = () => confirmAction?.();
+  openModal("confirmModal");
 }
 
 // Close modals on overlay click
@@ -55,7 +85,7 @@ function refreshCompanyTable() {
             <td>${esc(c.domain)}</td>
             <td>${esc(c.sector)}</td>
             <td>${c.employees}</td>
-            <td><button class="btn btn-ghost" style="padding:0.2rem 0.5rem;font-size:0.8rem" onclick="removeCompany(${i})">✕</button></td>
+            <td><button class="btn btn-ghost" style="padding:0.2rem 0.5rem;font-size:0.8rem" onclick="removeCompany(${c.id})">✕</button></td>
         `;
     tbody.appendChild(tr);
   });
@@ -80,13 +110,7 @@ async function submitAddCompany() {
   });
   const data = await res.json();
   if (data.ok) {
-    companies.push({
-      name,
-      domain: domain.replace(/^https?:\/\//, "").replace(/\/$/, ""),
-      sector,
-      employees,
-    });
-    refreshCompanyTable();
+    await loadCompanies();
     closeModal("addModal");
     // Reset form
     document.getElementById("addName").value = "";
@@ -120,9 +144,9 @@ async function submitUpload() {
   }
 }
 
-async function removeCompany(idx) {
-  await fetch(`/api/companies/${idx}`, { method: "DELETE" });
-  companies.splice(idx, 1);
+async function removeCompany(companyId) {
+  await fetch(`/api/companies/${companyId}`, { method: "DELETE" });
+  companies = companies.filter((c) => c.id !== companyId);
   refreshCompanyTable();
 }
 
@@ -137,6 +161,179 @@ async function loadCompanies() {
   const res = await fetch("/api/companies");
   companies = await res.json();
   refreshCompanyTable();
+}
+
+// ─── History ───
+function fmtDateTime(iso) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return String(iso || "");
+  }
+}
+
+function renderPager(el, page, pageSize, total, onPage) {
+  const totalPages = Math.max(1, Math.ceil((total || 0) / pageSize));
+  el.innerHTML = "";
+
+  const prev = document.createElement("button");
+  prev.className = "btn btn-ghost";
+  prev.textContent = "Prev";
+  prev.disabled = page <= 1;
+  prev.onclick = () => onPage(page - 1);
+
+  const next = document.createElement("button");
+  next.className = "btn btn-ghost";
+  next.textContent = "Next";
+  next.disabled = page >= totalPages;
+  next.onclick = () => onPage(page + 1);
+
+  const info = document.createElement("span");
+  info.className = "pager-info";
+  info.textContent = `Page ${page} / ${totalPages}`;
+
+  el.appendChild(prev);
+  el.appendChild(next);
+  el.appendChild(info);
+}
+
+function openHistoryReport(path) {
+  if (path) window.open(path, "_blank");
+}
+
+async function loadScanHistory(page = scanHistoryPage) {
+  scanHistoryPage = page;
+  const res = await fetch(
+    `/api/history/scans?page=${encodeURIComponent(page)}&page_size=${HISTORY_PAGE_SIZE}`,
+  );
+  const data = await res.json();
+
+  const tbody = document.getElementById("scanHistoryBody");
+  tbody.innerHTML = "";
+  (data.items || []).forEach((r) => {
+    const tr = document.createElement("tr");
+
+    const tdDt = document.createElement("td");
+    tdDt.textContent = fmtDateTime(r.created_at);
+
+    const tdCnt = document.createElement("td");
+    tdCnt.textContent = String(r.domain_count ?? "");
+
+    const tdAct = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.className = "btn btn-secondary";
+    btn.style.padding = "0.35rem 0.7rem";
+    btn.textContent = "Open";
+    btn.onclick = () => openHistoryReport(r.report_html_path);
+    tdAct.appendChild(btn);
+
+    tr.appendChild(tdDt);
+    tr.appendChild(tdCnt);
+    tr.appendChild(tdAct);
+    tbody.appendChild(tr);
+  });
+
+  renderPager(
+    document.getElementById("scanHistoryPager"),
+    data.page || page,
+    data.page_size || HISTORY_PAGE_SIZE,
+    data.total || 0,
+    (p) => loadScanHistory(p),
+  );
+}
+
+async function loadDomainListHistory(page = domainListHistoryPage) {
+  domainListHistoryPage = page;
+  const res = await fetch(
+    `/api/history/domain-lists?page=${encodeURIComponent(page)}&page_size=${HISTORY_PAGE_SIZE}`,
+  );
+  const data = await res.json();
+
+  const tbody = document.getElementById("domainListHistoryBody");
+  tbody.innerHTML = "";
+  (data.items || []).forEach((r) => {
+    const tr = document.createElement("tr");
+
+    const tdDt = document.createElement("td");
+    tdDt.textContent = fmtDateTime(r.created_at);
+
+    const tdCnt = document.createElement("td");
+    tdCnt.textContent = String(r.domain_count ?? "");
+
+    const tdAct = document.createElement("td");
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn-secondary";
+    btn.style.padding = "0.35rem 0.7rem";
+    btn.textContent = "View";
+    btn.onclick = () => viewDomainList(r.id);
+    tdAct.appendChild(btn);
+
+    const useBtn = document.createElement("button");
+    useBtn.className = "btn btn-primary";
+    useBtn.style.padding = "0.35rem 0.7rem";
+    useBtn.style.marginLeft = "0.5rem";
+    useBtn.textContent = "Use";
+    useBtn.onclick = () => promptUseDomainList(r.id, r.domain_count);
+    tdAct.appendChild(useBtn);
+
+    tr.appendChild(tdDt);
+    tr.appendChild(tdCnt);
+    tr.appendChild(tdAct);
+    tbody.appendChild(tr);
+  });
+
+  renderPager(
+    document.getElementById("domainListHistoryPager"),
+    data.page || page,
+    data.page_size || HISTORY_PAGE_SIZE,
+    data.total || 0,
+    (p) => loadDomainListHistory(p),
+  );
+}
+
+async function viewDomainList(domainListId) {
+  const res = await fetch(`/api/history/domain-lists/${domainListId}`);
+  const data = await res.json();
+  const items = data.items || [];
+
+  document.getElementById("detailTitle").textContent =
+    `Domain List #${domainListId} (${items.length})`;
+
+  let html =
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>#</th><th>Company</th><th>Domain</th></tr></thead><tbody>`;
+  items.forEach((it, i) => {
+    html += `<tr><td>${i + 1}</td><td>${esc(it.name)}</td><td>${esc(it.domain)}</td></tr>`;
+  });
+  html += `</tbody></table></div>`;
+
+  document.getElementById("detailBody").innerHTML = html;
+  openModal("detailModal");
+}
+
+function promptUseDomainList(domainListId, domainCount) {
+  openConfirmModal({
+    title: "Use Domain List",
+    message:
+      `This will replace your current Companies to Scan list with Domain List #${domainListId} ` +
+      `(${domainCount ?? "?"} domains). Continue?`,
+    okText: "Use List",
+    onOk: () => useDomainListNow(domainListId),
+  });
+}
+
+async function useDomainListNow(domainListId) {
+  const res = await fetch(`/api/history/domain-lists/${domainListId}/use`, {
+    method: "POST",
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    alert(data.error || "Failed to use domain list");
+    return;
+  }
+
+  await loadCompanies();
+  await loadDomainListHistory(domainListHistoryPage);
 }
 
 // ─── Scanning ───
@@ -209,6 +406,8 @@ function startEventStream() {
       eventSource = null;
       document.getElementById("btnStartScan").disabled = false;
       document.getElementById("btnStopScan").disabled = true;
+      loadScanHistory(1);
+      loadDomainListHistory(1);
     }
   };
 
@@ -455,3 +654,5 @@ document.addEventListener("keydown", (e) => {
 
 // ─── Init ───
 loadCompanies();
+loadScanHistory();
+loadDomainListHistory();
