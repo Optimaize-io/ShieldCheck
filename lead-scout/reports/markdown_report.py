@@ -159,7 +159,7 @@ class MarkdownReportGenerator:
             # Get first key gap or default message
             key_gap = lead.key_gaps[0][:40] + "..." if lead.key_gaps and len(lead.key_gaps[0]) > 40 else (lead.key_gaps[0] if lead.key_gaps else "No critical gaps")
             
-            table += f"| {i} | **{lead.company_name}** | {lead.sector[:20]} | {lead.employees:,} | {lead.total_score:.0f}/10 | {lead.tier.value} | {key_gap} |\n"
+            table += f"| {i} | **{lead.company_name}** | {lead.sector[:20]} | {lead.employees:,} | {lead.total_score:.1f}/{lead.max_score:.0f} | {lead.tier.value} | {key_gap} |\n"
         
         return table
     
@@ -181,7 +181,7 @@ class MarkdownReportGenerator:
 **Domain:** `{lead.domain}`  
 **Sector:** {lead.sector}  
 **Employees:** ~{lead.employees:,}  
-**Overall Score:** {lead.total_score:.0f}/10  
+**Overall Score:** {lead.total_score:.1f}/{lead.max_score:.0f}  
 
 """
         # NIS2 status
@@ -201,15 +201,22 @@ class MarkdownReportGenerator:
             ("Email Security", lead.email_security),
             ("Technical Hygiene", lead.technical_hygiene),
             ("TLS Certificate", lead.tls_certificate),
+            ("HTTP Headers", lead.http_headers),
+            ("Cookie Compliance", lead.cookie_compliance),
+            ("Attack Surface", lead.attack_surface),
+            ("Tech Stack", lead.tech_stack),
+            ("Admin Exposure", lead.admin_panel),
+            ("Security Hiring", lead.security_hiring),
+            ("Security Governance", lead.security_governance),
             ("Security Communication", lead.security_communication),
             ("NIS2 Readiness", lead.nis2_readiness),
         ]
         
         for name, dim in dimensions:
             if dim:
-                report += f"| {dim.emoji} {name} | {dim.score}/2 | {dim.description} |\n"
+                report += f"| {dim.emoji} {name} | {dim.display_score()} | {dim.description} |\n"
             else:
-                report += f"| ⚪ {name} | -/2 | Not checked |\n"
+                report += f"| ⚪ {name} | N/A | Not analyzed |\n"
         
         # Key findings
         if lead.key_gaps:
@@ -217,35 +224,32 @@ class MarkdownReportGenerator:
             for gap in lead.key_gaps:
                 report += f"- {gap}\n"
         
-        # Detailed findings from scans
-        report += "\n#### 📝 Technical Details\n\n"
-        
-        # DNS findings
-        if lead.dns_result and lead.dns_result.findings:
-            report += "**Email Security (DNS):**\n"
-            for finding in lead.dns_result.findings:
-                report += f"  {finding}\n"
-            report += "\n"
-        
-        # Shodan findings
-        if lead.shodan_result and lead.shodan_result.findings:
-            report += "**Internet Exposure (Shodan):**\n"
-            for finding in lead.shodan_result.findings[:6]:  # Limit to 6
-                report += f"  {finding}\n"
-            report += "\n"
-        
-        # SSL findings
-        if lead.ssl_result and lead.ssl_result.findings:
-            report += "**TLS/SSL Certificate:**\n"
-            for finding in lead.ssl_result.findings:
-                report += f"  {finding}\n"
-            report += "\n"
-        
-        # Website findings
-        if lead.website_result and lead.website_result.findings:
-            report += "**Website Analysis:**\n"
-            for finding in lead.website_result.findings[:5]:  # Limit to 5
-                report += f"  {finding}\n"
+        # Detailed findings (only what is wrong, in plain language)
+        report += "\n#### 📝 Detailed Findings\n\n"
+
+        all_dims = [
+            lead.email_security,
+            lead.technical_hygiene,
+            lead.tls_certificate,
+            lead.http_headers,
+            lead.cookie_compliance,
+            lead.attack_surface,
+            lead.tech_stack,
+            lead.admin_panel,
+            lead.security_hiring,
+            lead.security_governance,
+            lead.security_communication,
+            lead.nis2_readiness,
+        ]
+
+        for dim in all_dims:
+            if not dim or not dim.analyzed or not dim.missing:
+                continue
+            report += f"**{dim.name}:**\n"
+            for item in dim.missing:
+                report += f"- {item}\n"
+            if dim.risks:
+                report += f"- Risk: {dim.risks[0]}\n"
             report += "\n"
         
         # Sales angles - THE MAGIC SECTION
@@ -279,18 +283,22 @@ All information was gathered from publicly accessible sources:
 
 ### Scoring Logic
 
-Each company is scored on 5 dimensions (0-2 points each, total 0-10):
+Each company is assessed across **twelve security dimensions**. Each dimension consists of multiple checks (controls).
+This is why the report shows scores as **`score/max_score`** per dimension (for example `2/6` for HTTP headers).
 
-| Score | Meaning |
-|-------|---------|
-| 0 | Poor/missing protection - significant gap |
-| 1 | Partial protection - room for improvement |
-| 2 | Good protection - meets best practice |
+**Totals:** The overall score is the sum of all analyzed dimension scores, and the overall max score is the sum of the analyzed dimension max scores.
 
-**Lead Tiers:**
-- 🔴 **HOT (0-3):** Multiple critical gaps. Highest priority.
-- 🟠 **WARM (4-6):** Notable gaps exist. Good opportunity.
-- 🟢 **COOL (7-10):** Well-prepared. Maintenance opportunity.
+| Status | Meaning |
+|--------|---------|
+| 🔴 Risk | Major gaps / controls missing |
+| 🟠 Warning | Partial coverage / improvement needed |
+| 🟢 OK | Meets best-practice baseline |
+| ⚪ N/A | Not analyzed (scan unavailable) |
+
+**Lead tiers are percentage-based (lower score = hotter lead):**
+- 🔴 **HOT:** ≤ 45% of max score (many missing controls)
+- 🟠 **WARM:** ≤ 75% of max score (notable gaps)
+- 🟢 **COOL:** > 75% of max score (generally prepared)
 
 ### NIS2 Classification
 

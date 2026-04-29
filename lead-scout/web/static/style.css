@@ -87,6 +87,36 @@ body {
     box-shadow: var(--shadow-card);
 }
 .section h2 { font-size:1.1rem; font-weight:700; margin-bottom:0.75rem; }
+.section h3 { font-size:0.95rem; font-weight:700; margin:0 0 0.5rem 0; color:var(--text-primary); }
+
+/* ─── History ─── */
+.history-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+.history-header {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+}
+.pager {
+    display:flex;
+    gap:0.5rem;
+    align-items:center;
+    justify-content:flex-end;
+    margin-top:0.75rem;
+    color:var(--text-secondary);
+    font-size:0.82rem;
+}
+.pager .btn {
+    padding:0.35rem 0.7rem;
+    font-size:0.82rem;
+}
+.pager .pager-info {
+    font-family:'JetBrains Mono', monospace;
+    color:var(--text-secondary);
+}
 
 /* ─── Controls bar ─── */
 .controls-bar { padding:1rem 1.5rem; }
@@ -322,10 +352,50 @@ input[type=file].form-input { padding:0.4rem; }
 .score-row:last-child { border-bottom:none; }
 .score-val { font-family:'JetBrains Mono',monospace; font-weight:600; }
 
+.indicator {
+    display:inline-block;
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    margin-right:0.5rem;
+    vertical-align:middle;
+    box-shadow:0 0 0 2px rgba(255,255,255,0.06);
+}
+.indicator-risk { background:var(--hot); }
+.indicator-warning { background:var(--warm); }
+.indicator-ok { background:var(--cool); }
+.indicator-unknown { background:var(--text-muted); }
+
 .gap-item, .pos-item, .sales-item {
     padding:0.4rem 0.6rem; margin-bottom:0.35rem;
     background:var(--bg-elevated); border-radius:var(--radius-sm);
     font-size:0.85rem;
+    line-height:1.35;
+    word-break:break-word;
+}
+
+.gap-key {
+    border-left:3px solid var(--warm);
+}
+
+.rec-present {
+    border-left:3px solid var(--cool);
+    color: var(--cool);
+}
+
+.rec-missing {
+    border-left:3px solid var(--hot);
+    color: var(--hot);
+}
+
+.risk-item {
+    padding:0.4rem 0.6rem; margin-bottom:0.35rem;
+    background:var(--bg-elevated); border-radius:var(--radius-sm);
+    font-size:0.85rem;
+    line-height:1.35;
+    color: var(--text-primary);
+    border-left:3px solid var(--border-default);
+    word-break:break-word;
 }
 
 /* ─── Checkbox ─── */
@@ -337,5 +407,6 @@ input[type=checkbox] { accent-color:var(--cyan); }
     .dashboard { padding:1rem; }
     .controls-row { gap:0.4rem; }
     .stats-grid { grid-template-columns:repeat(2,1fr); }
+    .history-grid { grid-template-columns:1fr; }
     .detail-grid { grid-template-columns:1fr; }
 }

@@ -27,6 +27,7 @@ Desktop.ini
 
 # Output / generated reports
 lead-scout/output/
+lead-scout/data/lead_scout.sqlite3*
 lead-scout/reports/__pycache__/
 lead-scout/scanners/__pycache__/
 lead-scout/scoring/__pycache__/

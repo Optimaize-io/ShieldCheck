@@ -142,6 +142,49 @@
             <h2>📜 Scan Log</h2>
             <div class="log-box" id="logBox"></div>
         </section>
+
+        <!-- ═══ History (Persistent) ═══ -->
+        <section class="section" id="historySection">
+            <h2>⏪ History (Persistent)</h2>
+            <div class="history-grid">
+                <div>
+                    <div class="history-header">
+                        <h3>HTML Scan Overviews</h3>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="scanHistoryTable">
+                            <thead>
+                                <tr>
+                                    <th>Date/Time</th>
+                                    <th style="width:140px">Domains</th>
+                                    <th style="width:120px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="scanHistoryBody"></tbody>
+                        </table>
+                        <div class="pager" id="scanHistoryPager"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="history-header">
+                        <h3>Domain Lists Used For Scans</h3>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" id="domainListHistoryTable">
+                            <thead>
+                                <tr>
+                                    <th>Date/Time</th>
+                                    <th style="width:140px">Domains</th>
+                                    <th style="width:220px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="domainListHistoryBody"></tbody>
+                        </table>
+                        <div class="pager" id="domainListHistoryPager"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
     </main>
 
     <!-- ═══ Add Company Modal ═══ -->
@@ -199,6 +242,23 @@
                 <button class="modal-close" onclick="closeModal('detailModal')">&times;</button>
             </div>
             <div class="modal-body" id="detailBody"></div>
+        </div>
+    </div>
+
+    <!-- ═══ Confirm Modal ═══ -->
+    <div class="modal-overlay" id="confirmModal">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="confirmTitle">Confirm</h3>
+                <button class="modal-close" onclick="closeModal('confirmModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="confirmBody" style="color:var(--text-secondary);font-size:0.9rem;line-height:1.4"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="confirmCancelBtn" onclick="closeModal('confirmModal')">Cancel</button>
+                <button class="btn btn-primary" id="confirmOkBtn">Confirm</button>
+            </div>
         </div>
     </div>
 

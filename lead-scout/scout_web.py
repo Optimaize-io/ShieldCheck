@@ -43,6 +43,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from scout import LeadScout, CompanyInput, load_csv, load_json
 from scoring.scorer import LeadScore, LeadTier
 from reports.pdf_report import PDFReportGenerator
+from persistence import (
+    init_db as persistence_init_db,
+    list_current_companies,
+    add_current_company as persistence_add_current_company,
+    delete_current_company as persistence_delete_current_company,
+    clear_current_companies as persistence_clear_current_companies,
+    bulk_add_current_companies as persistence_bulk_add_current_companies,
+    create_domain_list_snapshot,
+    use_domain_list_as_current,
+    record_scan_run,
+    list_scan_runs_page,
+    list_domain_lists_page,
+    get_domain_list_items,
+)
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -56,6 +70,12 @@ app = Flask(
 app.secret_key = os.environ.get("SCOUT_SECRET_KEY", uuid.uuid4().hex)
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Persistence (SQLite)
+# ---------------------------------------------------------------------------
+
+persistence_init_db()
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -141,6 +161,24 @@ class ScanState:
 state = ScanState()
 
 
+def _reload_companies_from_db() -> None:
+    """Hydrate in-memory state from the persisted working set."""
+    rows = list_current_companies()
+    with state.lock:
+        state.companies = [
+            CompanyInput(
+                name=r["name"],
+                domain=r["domain"],
+                sector=r["sector"],
+                employees=int(r["employees"]),
+            )
+            for r in rows
+        ]
+
+
+_reload_companies_from_db()
+
+
 # ---------------------------------------------------------------------------
 # Log handler that feeds into ScanState
 # ---------------------------------------------------------------------------
@@ -173,7 +211,11 @@ logging.getLogger().addHandler(web_log_handler)
 
 
 def _scan_worker(
-    companies: List[CompanyInput], timeout: float, delay: float, verbose: bool
+    companies: List[CompanyInput],
+    timeout: float,
+    delay: float,
+    verbose: bool,
+    domain_list_id: int,
 ):
     """Background thread that runs the scan."""
     state.running = True
@@ -222,6 +264,16 @@ def _scan_worker(
 
             state.report_html_path = f"/output/{Path(html_path).name}"
             state.report_json_path = json_path
+
+            try:
+                record_scan_run(
+                    domain_list_id=domain_list_id,
+                    domain_count=len(lead_scores),
+                    report_html_path=state.report_html_path,
+                    report_json_path=f"/output/{Path(json_path).name}",
+                )
+            except Exception as e:
+                state.add_log(f"WARNING: failed to persist scan run: {e}")
 
             # Generate individual PDF reports
             pdf_dir = output_dir / "pdfs"
@@ -289,18 +341,7 @@ def index():
 @app.route("/api/companies", methods=["GET"])
 @login_required
 def get_companies():
-    with state.lock:
-        return jsonify(
-            [
-                {
-                    "name": c.name,
-                    "domain": c.domain,
-                    "sector": c.sector,
-                    "employees": c.employees,
-                }
-                for c in state.companies
-            ]
-        )
+    return jsonify(list_current_companies())
 
 
 @app.route("/api/companies", methods=["POST"])
@@ -324,30 +365,30 @@ def add_company():
         employees = 100
 
     domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
+    company_id = persistence_add_current_company(
+        name=name, domain=domain, sector=sector, employees=employees
+    )
+    _reload_companies_from_db()
 
-    company = CompanyInput(name=name, domain=domain, sector=sector, employees=employees)
-    with state.lock:
-        state.companies.append(company)
-
-    return jsonify({"ok": True, "count": len(state.companies)})
+    return jsonify({"ok": True, "id": company_id})
 
 
 @app.route("/api/companies", methods=["DELETE"])
 @login_required
 def clear_companies():
-    with state.lock:
-        state.companies.clear()
+    persistence_clear_current_companies()
+    _reload_companies_from_db()
     return jsonify({"ok": True})
 
 
-@app.route("/api/companies/<int:idx>", methods=["DELETE"])
+@app.route("/api/companies/<int:company_id>", methods=["DELETE"])
 @login_required
-def remove_company(idx: int):
-    with state.lock:
-        if 0 <= idx < len(state.companies):
-            state.companies.pop(idx)
-            return jsonify({"ok": True})
-    return jsonify({"error": "Invalid index"}), 404
+def remove_company(company_id: int):
+    ok = persistence_delete_current_company(company_id)
+    _reload_companies_from_db()
+    if not ok:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -421,11 +462,21 @@ def upload_file():
                         )
                     )
 
-        with state.lock:
-            state.companies.extend(loaded)
+        inserted = persistence_bulk_add_current_companies(
+            [
+                {
+                    "name": c.name,
+                    "domain": c.domain,
+                    "sector": c.sector,
+                    "employees": c.employees,
+                }
+                for c in loaded
+            ]
+        )
+        _reload_companies_from_db()
 
         return jsonify(
-            {"ok": True, "loaded": len(loaded), "total": len(state.companies)}
+            {"ok": True, "loaded": inserted, "total": len(list_current_companies())}
         )
 
     except Exception as e:
@@ -450,8 +501,21 @@ def start_scan():
     state.reset()
 
     companies_copy = list(state.companies)
+    domain_list_id = create_domain_list_snapshot(
+        [
+            {
+                "name": c.name,
+                "domain": c.domain,
+                "sector": c.sector,
+                "employees": c.employees,
+            }
+            for c in companies_copy
+        ]
+    )
     thread = threading.Thread(
-        target=_scan_worker, args=(companies_copy, timeout, delay, verbose), daemon=True
+        target=_scan_worker,
+        args=(companies_copy, timeout, delay, verbose, domain_list_id),
+        daemon=True,
     )
     thread.start()
 
@@ -469,6 +533,53 @@ def stop_scan():
 @login_required
 def scan_status():
     return jsonify(state.snapshot())
+
+
+@app.route("/api/history/scans")
+@login_required
+def history_scans():
+    try:
+        page = int(request.args.get("page", 1))
+    except Exception:
+        page = 1
+    try:
+        page_size = int(request.args.get("page_size", 10))
+    except Exception:
+        page_size = 10
+    total, items = list_scan_runs_page(page=page, page_size=page_size)
+    return jsonify({"page": page, "page_size": page_size, "total": total, "items": items})
+
+
+@app.route("/api/history/domain-lists")
+@login_required
+def history_domain_lists():
+    try:
+        page = int(request.args.get("page", 1))
+    except Exception:
+        page = 1
+    try:
+        page_size = int(request.args.get("page_size", 10))
+    except Exception:
+        page_size = 10
+    total, items = list_domain_lists_page(page=page, page_size=page_size)
+    return jsonify({"page": page, "page_size": page_size, "total": total, "items": items})
+
+
+@app.route("/api/history/domain-lists/<int:domain_list_id>")
+@login_required
+def history_domain_list_items(domain_list_id: int):
+    return jsonify({"id": domain_list_id, "items": get_domain_list_items(domain_list_id)})
+
+
+@app.route("/api/history/domain-lists/<int:domain_list_id>/use", methods=["POST"])
+@login_required
+def use_history_domain_list(domain_list_id: int):
+    try:
+        count = use_domain_list_as_current(domain_list_id)
+        _reload_companies_from_db()
+        return jsonify({"ok": True, "count": count})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/api/scan/stream")
