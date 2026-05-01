@@ -1841,7 +1841,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Jobs -->
-                    ${raw.jobs ? `
+                    ${false && raw.jobs ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Security Hiring Signals</span>
@@ -1891,7 +1891,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Website -->
-                    ${raw.website ? `
+                    ${false && raw.website ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Website Signals (Security & NIS2)</span>
@@ -1949,7 +1949,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Governance -->
-                    ${raw.governance ? `
+                    ${false && raw.governance ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Governance Signals</span>
