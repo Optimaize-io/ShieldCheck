@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from assessment_service import AssessmentService
 from models import CompanyInput
-from scoring.scorer import LeadScore
+from scoring.scorer import LeadScore, LeadScorer
 
 
 LOG_FILE = Path(__file__).parent / "output" / "scout.log"
@@ -49,6 +49,53 @@ if not any(
     root_logger.addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_nis2_for_lead_app(lead: LeadScore) -> LeadScore:
+    """Remove NIS2-specific scoring and messaging from lead-generation output."""
+
+    lead.nis2_readiness = None
+    lead.nis2_sector = None
+    lead.nis2_entity_type = None
+    lead.nis2_covered = False
+    lead.compliance_priority = "UNKNOWN"
+
+    def keep_text(value: str) -> bool:
+        text = (value or "").lower()
+        return "nis2" not in text and "cyberbeveiligingswet" not in text
+
+    lead.key_gaps = [item for item in lead.key_gaps if keep_text(item)]
+    lead.sales_angles = [item for item in lead.sales_angles if keep_text(item)]
+    lead.key_gaps_detailed = [
+        item
+        for item in lead.key_gaps_detailed
+        if keep_text(item.get("title", ""))
+        and keep_text(item.get("finding", ""))
+        and keep_text(item.get("description", ""))
+        and keep_text(item.get("impact", ""))
+    ]
+
+    if lead.management_summary and not keep_text(lead.management_summary):
+        lead.management_summary = ""
+
+    dimensions = [
+        lead.email_security,
+        lead.technical_hygiene,
+        lead.tls_certificate,
+        lead.http_headers,
+        lead.cookie_compliance,
+        lead.attack_surface,
+        lead.tech_stack,
+        lead.admin_panel,
+        lead.security_hiring,
+        lead.security_governance,
+        lead.security_communication,
+    ]
+    analyzed_dimensions = [d for d in dimensions if d and d.analyzed]
+    lead.total_score = float(sum(d.score for d in analyzed_dimensions))
+    lead.max_score = float(sum(d.max_score for d in analyzed_dimensions))
+    lead.tier = LeadScorer()._determine_tier(lead.total_score, lead.max_score)
+    return lead
 
 
 class LeadScout:
@@ -96,7 +143,8 @@ class LeadScout:
             logger.warning("Could not remove incremental file: %s", exc)
 
     def scan_company(self, company: CompanyInput) -> LeadScore:
-        return self.assessment_service.scan_company(company)
+        lead = self.assessment_service.scan_company(company)
+        return _strip_nis2_for_lead_app(lead)
 
     def scan_companies(
         self,

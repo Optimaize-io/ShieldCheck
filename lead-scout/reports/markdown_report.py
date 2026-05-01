@@ -3,10 +3,10 @@ Markdown Report Generator
 Generates professional markdown reports from lead scan results.
 """
 
-from typing import List, Optional
 from datetime import datetime
 import json
 from pathlib import Path
+from typing import List, Optional
 
 from scoring.scorer import LeadScore, LeadTier
 
@@ -16,30 +16,17 @@ class MarkdownReportGenerator:
     Generates professional markdown reports from lead scan results.
     The report IS the product - formatting matters for Nomios.
     """
-    
+
     def __init__(self):
         self.generated_at = datetime.now()
-    
+
     def generate(self, leads: List[LeadScore], output_path: Optional[str] = None) -> str:
-        """
-        Generate a complete markdown report.
-        
-        Args:
-            leads: List of scored leads
-            output_path: Optional path to write report
-            
-        Returns:
-            Complete markdown report as string
-        """
-        # Sort leads by score (lowest/worst first = hottest leads)
         sorted_leads = sorted(leads, key=lambda x: x.total_score)
-        
-        # Count by tier
+
         hot_count = sum(1 for l in leads if l.tier == LeadTier.HOT)
         warm_count = sum(1 for l in leads if l.tier == LeadTier.WARM)
         cool_count = sum(1 for l in leads if l.tier == LeadTier.COOL)
-        
-        # Build report sections
+
         sections = [
             self._header(len(leads)),
             self._executive_summary(leads, hot_count, warm_count, cool_count),
@@ -48,25 +35,15 @@ class MarkdownReportGenerator:
             self._methodology(),
             self._scale_up_pitch(len(leads)),
         ]
-        
+
         report = "\n\n".join(sections)
-        
-        # Write to file if path provided
         if output_path:
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(report)
-        
+            with open(output_path, "w", encoding="utf-8") as handle:
+                handle.write(report)
         return report
-    
+
     def generate_json(self, leads: List[LeadScore], output_path: str) -> None:
-        """
-        Generate JSON data file with all results.
-        
-        Args:
-            leads: List of scored leads
-            output_path: Path to write JSON file
-        """
         data = {
             "generated_at": self.generated_at.isoformat(),
             "total_companies": len(leads),
@@ -75,64 +52,45 @@ class MarkdownReportGenerator:
                 "warm_leads": sum(1 for l in leads if l.tier == LeadTier.WARM),
                 "cool_leads": sum(1 for l in leads if l.tier == LeadTier.COOL),
             },
-            "leads": [lead.to_dict() for lead in sorted(leads, key=lambda x: x.total_score)]
+            "leads": [lead.to_dict() for lead in sorted(leads, key=lambda x: x.total_score)],
         }
-        
+
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+
     def _header(self, company_count: int) -> str:
-        """Generate report header."""
         date_str = self.generated_at.strftime("%Y-%m-%d %H:%M")
-        
-        return f"""# 🔍 Lead Scout Report
-## NIS2 Compliance & Security Posture Analysis
+        return f"""# Lead Scout Report
+## Security Posture Analysis
 
 **Generated:** {date_str}  
 **Companies Analyzed:** {company_count}  
 **Powered by:** Polderbase Lead Scout
 
 ---"""
-    
+
     def _executive_summary(
-        self, 
-        leads: List[LeadScore], 
-        hot: int, 
-        warm: int, 
-        cool: int
+        self, leads: List[LeadScore], hot: int, warm: int, cool: int
     ) -> str:
-        """Generate executive summary."""
         total = len(leads)
-        
-        # Find the most common gaps
         gap_counts = {}
         for lead in leads:
             for gap in lead.key_gaps:
-                gap_type = gap.split(' - ')[0].split(':')[0][:40]
+                gap_type = gap.split(" - ")[0].split(":")[0][:40]
                 gap_counts[gap_type] = gap_counts.get(gap_type, 0) + 1
-        
+
         top_gaps = sorted(gap_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        # NIS2 coverage
-        nis2_covered = sum(1 for l in leads if l.nis2_covered)
-        critical_priority = sum(1 for l in leads if l.compliance_priority == "CRITICAL")
-        
-        summary = f"""## 📊 Executive Summary
+
+        summary = f"""## Executive Summary
 
 ### Lead Distribution
 
 | Tier | Count | Percentage | Description |
 |------|-------|------------|-------------|
-| 🔴 **HOT** | {hot} | {hot/total*100:.0f}% | Major gaps everywhere. Highest priority. |
-| 🟠 **WARM** | {warm} | {warm/total*100:.0f}% | Notable gaps. Good opportunities. |
-| 🟢 **COOL** | {cool} | {cool/total*100:.0f}% | Reasonably prepared. Lower priority. |
-
-### NIS2 Compliance Outlook
-
-- **{nis2_covered}** companies likely covered by NIS2/Cyberbeveiligingswet
-- **{critical_priority}** with CRITICAL compliance priority (large essential entities)
-- Dutch implementation deadline: **Q2 2026**
+| HOT | {hot} | {hot/total*100:.0f}% | Major gaps everywhere. Highest priority. |
+| WARM | {warm} | {warm/total*100:.0f}% | Notable gaps. Good opportunities. |
+| COOL | {cool} | {cool/total*100:.0f}% | Reasonably prepared. Lower priority. |
 
 ### Most Common Security Gaps
 
@@ -143,12 +101,10 @@ class MarkdownReportGenerator:
                 summary += f"- **{gap}** - {count} companies ({pct:.0f}%)\n"
         else:
             summary += "- No significant common gaps identified\n"
-        
         return summary
-    
+
     def _ranking_table(self, leads: List[LeadScore]) -> str:
-        """Generate ranking table sorted by score (hottest first)."""
-        table = """## 🏆 Lead Rankings
+        table = """## Lead Rankings
 
 > **Note:** Lower scores indicate more security gaps = higher priority leads
 
@@ -156,26 +112,26 @@ class MarkdownReportGenerator:
 |------|---------|--------|-----------|-------|------|---------|
 """
         for i, lead in enumerate(leads, 1):
-            # Get first key gap or default message
-            key_gap = lead.key_gaps[0][:40] + "..." if lead.key_gaps and len(lead.key_gaps[0]) > 40 else (lead.key_gaps[0] if lead.key_gaps else "No critical gaps")
-            
-            table += f"| {i} | **{lead.company_name}** | {lead.sector[:20]} | {lead.employees:,} | {lead.total_score:.1f}/{lead.max_score:.0f} | {lead.tier.value} | {key_gap} |\n"
-        
+            key_gap = (
+                lead.key_gaps[0][:40] + "..."
+                if lead.key_gaps and len(lead.key_gaps[0]) > 40
+                else (lead.key_gaps[0] if lead.key_gaps else "No critical gaps")
+            )
+            table += (
+                f"| {i} | **{lead.company_name}** | {lead.sector[:20]} | "
+                f"{lead.employees:,} | {lead.total_score:.1f}/{lead.max_score:.0f} | "
+                f"{lead.tier.value} | {key_gap} |\n"
+            )
         return table
-    
+
     def _detailed_reports(self, leads: List[LeadScore]) -> str:
-        """Generate detailed per-company reports."""
-        details = "## 📋 Detailed Company Reports\n\n"
-        details += "> Sorted by priority (highest first)\n\n"
-        
+        details = "## Detailed Company Reports\n\n> Sorted by priority (highest first)\n\n"
         for lead in leads:
             details += self._company_report(lead)
             details += "\n---\n\n"
-        
         return details
-    
+
     def _company_report(self, lead: LeadScore) -> str:
-        """Generate detailed report for one company."""
         report = f"""### {lead.tier.value} {lead.company_name}
 
 **Domain:** `{lead.domain}`  
@@ -184,14 +140,6 @@ class MarkdownReportGenerator:
 **Overall Score:** {lead.total_score:.1f}/{lead.max_score:.0f}  
 
 """
-        # NIS2 status
-        if lead.nis2_covered:
-            report += f"""**⚠️ NIS2 Status:** Likely covered as **{lead.nis2_entity_type}** entity in **{lead.nis2_sector}**  
-**Compliance Priority:** {lead.compliance_priority}
-
-"""
-        
-        # Score breakdown
         report += """#### Score Breakdown
 
 | Dimension | Score | Assessment |
@@ -209,24 +157,20 @@ class MarkdownReportGenerator:
             ("Security Hiring", lead.security_hiring),
             ("Security Governance", lead.security_governance),
             ("Security Communication", lead.security_communication),
-            ("NIS2 Readiness", lead.nis2_readiness),
         ]
-        
+
         for name, dim in dimensions:
             if dim:
-                report += f"| {dim.emoji} {name} | {dim.display_score()} | {dim.description} |\n"
+                report += f"| {name} | {dim.display_score()} | {dim.description} |\n"
             else:
-                report += f"| ⚪ {name} | N/A | Not analyzed |\n"
-        
-        # Key findings
+                report += f"| {name} | N/A | Not analyzed |\n"
+
         if lead.key_gaps:
-            report += "\n#### 🚨 Key Findings\n\n"
+            report += "\n#### Key Findings\n\n"
             for gap in lead.key_gaps:
                 report += f"- {gap}\n"
-        
-        # Detailed findings (only what is wrong, in plain language)
-        report += "\n#### 📝 Detailed Findings\n\n"
 
+        report += "\n#### Detailed Findings\n\n"
         all_dims = [
             lead.email_security,
             lead.technical_hygiene,
@@ -239,9 +183,7 @@ class MarkdownReportGenerator:
             lead.security_hiring,
             lead.security_governance,
             lead.security_communication,
-            lead.nis2_readiness,
         ]
-
         for dim in all_dims:
             if not dim or not dim.analyzed or not dim.missing:
                 continue
@@ -251,18 +193,16 @@ class MarkdownReportGenerator:
             if dim.risks:
                 report += f"- Risk: {dim.risks[0]}\n"
             report += "\n"
-        
-        # Sales angles - THE MAGIC SECTION
+
         if lead.sales_angles:
-            report += "#### 💼 Recommended Sales Approach\n\n"
+            report += "#### Recommended Sales Approach\n\n"
             for i, angle in enumerate(lead.sales_angles, 1):
                 report += f"{i}. {angle}\n\n"
-        
+
         return report
-    
+
     def _methodology(self) -> str:
-        """Generate methodology section."""
-        return """## 🔬 Methodology
+        return """## Methodology
 
 ### About This Report
 
@@ -272,48 +212,28 @@ All information was gathered from publicly accessible sources:
 1. **DNS Record Analysis** - SPF, DMARC, and DKIM records that define email authentication
 2. **Internet Exposure Check** - Shodan InternetDB for open ports and known vulnerabilities
 3. **SSL/TLS Validation** - Certificate validity, expiry, and protocol support
-4. **Website Content Analysis** - Public pages scanned for security messaging and NIS2 awareness
+4. **Website Content Analysis** - Public pages scanned for security messaging and trust signals
 
 ### Legal & Ethical Notes
 
-✅ **No hacking or unauthorized access** - Only public information was used  
-✅ **No login attempts** - No authentication was attempted  
-✅ **Rate-limited requests** - Polite scanning with delays between checks  
-✅ **Identifiable User-Agent** - All requests identified as security research  
+- **No hacking or unauthorized access** - Only public information was used  
+- **No login attempts** - No authentication was attempted  
+- **Rate-limited requests** - Polite scanning with delays between checks  
+- **Identifiable User-Agent** - All requests identified as security research  
 
 ### Scoring Logic
 
-Each company is assessed across **twelve security dimensions**. Each dimension consists of multiple checks (controls).
-This is why the report shows scores as **`score/max_score`** per dimension (for example `2/6` for HTTP headers).
-
-**Totals:** The overall score is the sum of all analyzed dimension scores, and the overall max score is the sum of the analyzed dimension max scores.
-
-| Status | Meaning |
-|--------|---------|
-| 🔴 Risk | Major gaps / controls missing |
-| 🟠 Warning | Partial coverage / improvement needed |
-| 🟢 OK | Meets best-practice baseline |
-| ⚪ N/A | Not analyzed (scan unavailable) |
+Each company is assessed across the lead-generation dimensions that matter for outward security posture. 
+The report shows scores as **`score/max_score`** per dimension.
 
 **Lead tiers are percentage-based (lower score = hotter lead):**
-- 🔴 **HOT:** ≤ 45% of max score (many missing controls)
-- 🟠 **WARM:** ≤ 75% of max score (notable gaps)
-- 🟢 **COOL:** > 75% of max score (generally prepared)
-
-### NIS2 Classification
-
-Companies are classified based on the EU NIS2 Directive and the Dutch 
-Cyberbeveiligingswet implementation. Sectors are identified from:
-- Stated company sector
-- Website content analysis for sector keywords
-
-Size thresholds (generally 50+ employees for coverage) are applied based 
-on provided employee estimates.
+- **HOT:** <= 45% of max score
+- **WARM:** <= 75% of max score
+- **COOL:** > 75% of max score
 """
-    
+
     def _scale_up_pitch(self, company_count: int) -> str:
-        """Generate scale-up pitch for Nomios."""
-        return f"""## 🚀 Scale-Up Opportunity
+        return f"""## Scale-Up Opportunity
 
 This report analyzed **{company_count} companies** to demonstrate our capabilities.
 
@@ -334,9 +254,7 @@ This report analyzed **{company_count} companies** to demonstrate our capabiliti
 4. **Custom Scoring** - Tune the algorithm for your ideal customer profile
 5. **Dashboard Access** - Real-time view of lead pipeline
 
-### NIS2 Deadline: Q2 2026
-
-Thousands of Dutch companies are affected but unprepared. This tool finds the ones 
+Thousands of Dutch companies show visible security gaps. This tool finds the ones 
 most likely to need Nomios's services - **before your competitors find them.**
 
 ---
