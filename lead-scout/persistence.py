@@ -87,6 +87,34 @@ def init_db(db_path: Optional[Path] = None) -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS self_check_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              token TEXT NOT NULL UNIQUE,
+              created_at TEXT NOT NULL,
+              submitted_at TEXT,
+              completed_at TEXT,
+              status TEXT NOT NULL,
+              domain TEXT NOT NULL,
+              company_name TEXT NOT NULL,
+              sector TEXT NOT NULL,
+              employees INTEGER NOT NULL,
+              contact_name TEXT,
+              contact_email TEXT,
+              report_html_path TEXT,
+              report_pdf_path TEXT,
+              report_json_path TEXT,
+              email_delivery_status TEXT,
+              emailed_at TEXT,
+              findings_count INTEGER,
+              total_score REAL,
+              max_score REAL,
+              tier TEXT
+            );
+            """
+        )
+
         # Lightweight migration for existing single-user databases.
         for table in ("current_companies", "domain_lists", "scan_runs"):
             if not _column_exists(conn, table, "owner_username"):
@@ -112,6 +140,12 @@ def init_db(db_path: Optional[Path] = None) -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_current_companies_owner_id ON current_companies(owner_username, id ASC);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_check_runs_token ON self_check_runs(token);"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_check_runs_created_at ON self_check_runs(created_at DESC);"
         )
         conn.commit()
     finally:
@@ -458,5 +492,122 @@ def user_owns_output_path(
             (owner_username, output_path, output_path),
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Self-check runs
+# ---------------------------------------------------------------------------
+
+
+def create_self_check_run(
+    *,
+    token: str,
+    domain: str,
+    company_name: str,
+    sector: str,
+    employees: int,
+    status: str = "queued",
+    db_path: Optional[Path] = None,
+) -> int:
+    conn = connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO self_check_runs(
+              token, created_at, status, domain, company_name, sector, employees
+            )
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                token,
+                _utc_now_iso(),
+                status,
+                domain,
+                company_name,
+                sector,
+                int(employees),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def update_self_check_run(
+    token: str,
+    *,
+    status: Optional[str] = None,
+    contact_name: Optional[str] = None,
+    contact_email: Optional[str] = None,
+    report_html_path: Optional[str] = None,
+    report_pdf_path: Optional[str] = None,
+    report_json_path: Optional[str] = None,
+    email_delivery_status: Optional[str] = None,
+    findings_count: Optional[int] = None,
+    total_score: Optional[float] = None,
+    max_score: Optional[float] = None,
+    tier: Optional[str] = None,
+    set_submitted_at: bool = False,
+    set_completed_at: bool = False,
+    set_emailed_at: bool = False,
+    db_path: Optional[Path] = None,
+) -> None:
+    assignments = []
+    params: List[Any] = []
+
+    updates = {
+        "status": status,
+        "contact_name": contact_name,
+        "contact_email": contact_email,
+        "report_html_path": report_html_path,
+        "report_pdf_path": report_pdf_path,
+        "report_json_path": report_json_path,
+        "email_delivery_status": email_delivery_status,
+        "findings_count": findings_count,
+        "total_score": total_score,
+        "max_score": max_score,
+        "tier": tier,
+    }
+    for column, value in updates.items():
+        if value is not None:
+            assignments.append(f"{column} = ?")
+            params.append(value)
+
+    if set_submitted_at:
+        assignments.append("submitted_at = ?")
+        params.append(_utc_now_iso())
+    if set_completed_at:
+        assignments.append("completed_at = ?")
+        params.append(_utc_now_iso())
+    if set_emailed_at:
+        assignments.append("emailed_at = ?")
+        params.append(_utc_now_iso())
+
+    if not assignments:
+        return
+
+    params.append(token)
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            f"UPDATE self_check_runs SET {', '.join(assignments)} WHERE token = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_self_check_run(token: str, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    conn = connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM self_check_runs WHERE token = ? LIMIT 1",
+            (token,),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()

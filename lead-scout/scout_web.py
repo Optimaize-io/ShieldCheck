@@ -36,6 +36,7 @@ from flask import (
     send_from_directory,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -69,6 +70,7 @@ app = Flask(
     static_folder=str(Path(__file__).parent / "web" / "static"),
 )
 app.secret_key = os.environ.get("SCOUT_SECRET_KEY", uuid.uuid4().hex)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
 logger = logging.getLogger(__name__)
 

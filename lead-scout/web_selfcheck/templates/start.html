@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShieldCheck Self-Check</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='selfcheck.css') }}">
+</head>
+<body>
+<main class="page page-start">
+    <section class="hero-layout">
+        <div class="hero-panel">
+            <div class="brand-row">
+                <div class="brand-mark">S</div>
+                <div>
+                    <div class="brand-name">ShieldCheck</div>
+                    <div class="brand-subtitle">Self-service NIS2 baseline</div>
+                </div>
+            </div>
+            <div class="eyebrow">External security self-check</div>
+            <h1>NIS2 self-check for your business website</h1>
+            <p class="lede">
+                Enter your domain to run a quick public-facing review of email security, exposed services,
+                website hardening, and visible NIS2 readiness signals.
+            </p>
+            <div class="feature-grid">
+                <div class="feature-tile">
+                    <div class="feature-kicker">What you get</div>
+                    <div class="feature-title">Instant web report</div>
+                    <p>Review the findings online as soon as the scan is complete.</p>
+                </div>
+                <div class="feature-tile">
+                    <div class="feature-kicker">For follow-up</div>
+                    <div class="feature-title">PDF by email</div>
+                    <p>Share the report internally with management, IT, or compliance stakeholders.</p>
+                </div>
+                <div class="feature-tile">
+                    <div class="feature-kicker">How it works</div>
+                    <div class="feature-title">Public signals only</div>
+                    <p>No login attempts, no intrusive testing, and no changes to your environment.</p>
+                </div>
+            </div>
+        </div>
+        <div class="action-panel">
+            <div class="panel-head">
+                <div class="eyebrow">Start</div>
+                <h2>Run your scan</h2>
+                <p>Use the main domain your customers and staff rely on.</p>
+            </div>
+            <form class="domain-form" method="post" action="{{ url_for('selfcheck.self_check_start_post') }}">
+                <label for="domain" class="field-label">Business domain</label>
+                <div class="field-row field-row-stack">
+                    <input id="domain" name="domain" type="text" value="{{ domain }}" placeholder="example.nl" autocomplete="off" required>
+                    <button type="submit">Start scan</button>
+                </div>
+                {% if error %}
+                <div class="form-error">{{ error }}</div>
+                {% endif %}
+                <p class="form-note">The scan typically finishes within a minute, depending on the external services being checked.</p>
+            </form>
+            <div class="process-strip">
+                <div class="process-step"><span>1</span> Scan</div>
+                <div class="process-step"><span>2</span> Email</div>
+                <div class="process-step"><span>3</span> Report</div>
+            </div>
+        </div>
+    </section>
+</main>
+</body>
+</html>
