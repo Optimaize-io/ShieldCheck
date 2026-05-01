@@ -156,7 +156,6 @@ class MarkdownReportGenerator:
             ("Admin Exposure", lead.admin_panel),
             ("Security Hiring", lead.security_hiring),
             ("Security Governance", lead.security_governance),
-            ("Security Communication", lead.security_communication),
         ]
 
         for name, dim in dimensions:
@@ -182,7 +181,6 @@ class MarkdownReportGenerator:
             lead.admin_panel,
             lead.security_hiring,
             lead.security_governance,
-            lead.security_communication,
         ]
         for dim in all_dims:
             if not dim or not dim.analyzed or not dim.missing:

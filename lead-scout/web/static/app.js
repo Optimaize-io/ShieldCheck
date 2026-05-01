@@ -496,7 +496,6 @@ function showDetail(idx) {
     admin_panel: "Admin Exposure",
     security_hiring: "Security Hiring",
     security_governance: "Security Governance",
-    security_communication: "Security Communication",
   };
 
   let html = `
