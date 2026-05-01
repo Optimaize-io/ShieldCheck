@@ -56,6 +56,7 @@ from persistence import (
     list_scan_runs_page,
     list_domain_lists_page,
     get_domain_list_items,
+    user_owns_output_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -83,10 +84,15 @@ persistence_init_db()
 
 _DEFAULT_USER = "admin"
 _DEFAULT_PASS = "ShieldCheck2026!"
+_TEST_USER = "testuser"
+_TEST_PASS = "ShieldCheckTest2026!"
 
 USERS = {
     os.environ.get("SCOUT_USER", _DEFAULT_USER): generate_password_hash(
         os.environ.get("SCOUT_PASS", _DEFAULT_PASS)
+    ),
+    os.environ.get("SCOUT_TEST_USER", _TEST_USER): generate_password_hash(
+        os.environ.get("SCOUT_TEST_PASS", _TEST_PASS)
     ),
 }
 
@@ -106,7 +112,7 @@ def login_required(f):
 
 
 # ---------------------------------------------------------------------------
-# In-memory scan state (single-user; for multi-user wrap in a dict by session)
+# In-memory scan state (scoped per authenticated user)
 # ---------------------------------------------------------------------------
 
 
@@ -158,12 +164,22 @@ class ScanState:
             }
 
 
-state = ScanState()
+_state_lock = threading.Lock()
+_state_by_user: Dict[str, ScanState] = {}
+_scan_context = threading.local()
 
 
-def _reload_companies_from_db() -> None:
-    """Hydrate in-memory state from the persisted working set."""
-    rows = list_current_companies()
+def get_user_state(username: str) -> ScanState:
+    with _state_lock:
+        if username not in _state_by_user:
+            _state_by_user[username] = ScanState()
+        return _state_by_user[username]
+
+
+def _reload_companies_from_db(username: str) -> None:
+    """Hydrate in-memory state from the persisted working set for one user."""
+    state = get_user_state(username)
+    rows = list_current_companies(username)
     with state.lock:
         state.companies = [
             CompanyInput(
@@ -176,28 +192,24 @@ def _reload_companies_from_db() -> None:
         ]
 
 
-_reload_companies_from_db()
-
-
 # ---------------------------------------------------------------------------
 # Log handler that feeds into ScanState
 # ---------------------------------------------------------------------------
 
 
 class WebLogHandler(logging.Handler):
-    def __init__(self, scan_state: ScanState):
-        super().__init__()
-        self.scan_state = scan_state
-
     def emit(self, record):
         try:
+            username = getattr(_scan_context, "username", None)
+            if not username:
+                return
             msg = self.format(record)
-            self.scan_state.add_log(msg)
+            get_user_state(username).add_log(msg)
         except Exception:
             pass
 
 
-web_log_handler = WebLogHandler(state)
+web_log_handler = WebLogHandler()
 web_log_handler.setLevel(logging.INFO)
 web_log_handler.setFormatter(
     logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -211,6 +223,7 @@ logging.getLogger().addHandler(web_log_handler)
 
 
 def _scan_worker(
+    username: str,
     companies: List[CompanyInput],
     timeout: float,
     delay: float,
@@ -218,6 +231,8 @@ def _scan_worker(
     domain_list_id: int,
 ):
     """Background thread that runs the scan."""
+    state = get_user_state(username)
+    _scan_context.username = username
     state.running = True
     state.total = len(companies)
 
@@ -267,6 +282,7 @@ def _scan_worker(
 
             try:
                 record_scan_run(
+                    owner_username=username,
                     domain_list_id=domain_list_id,
                     domain_count=len(lead_scores),
                     report_html_path=state.report_html_path,
@@ -304,6 +320,7 @@ def _scan_worker(
     finally:
         state.running = False
         state.current_company = ""
+        _scan_context.username = None
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +358,8 @@ def index():
 @app.route("/api/companies", methods=["GET"])
 @login_required
 def get_companies():
-    return jsonify(list_current_companies())
+    username = session.get("username", "")
+    return jsonify(list_current_companies(username))
 
 
 @app.route("/api/companies", methods=["POST"])
@@ -366,9 +384,13 @@ def add_company():
 
     domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
     company_id = persistence_add_current_company(
-        name=name, domain=domain, sector=sector, employees=employees
+        name=name,
+        domain=domain,
+        sector=sector,
+        employees=employees,
+        owner_username=session.get("username", ""),
     )
-    _reload_companies_from_db()
+    _reload_companies_from_db(session.get("username", ""))
 
     return jsonify({"ok": True, "id": company_id})
 
@@ -376,16 +398,18 @@ def add_company():
 @app.route("/api/companies", methods=["DELETE"])
 @login_required
 def clear_companies():
-    persistence_clear_current_companies()
-    _reload_companies_from_db()
+    username = session.get("username", "")
+    persistence_clear_current_companies(username)
+    _reload_companies_from_db(username)
     return jsonify({"ok": True})
 
 
 @app.route("/api/companies/<int:company_id>", methods=["DELETE"])
 @login_required
 def remove_company(company_id: int):
-    ok = persistence_delete_current_company(company_id)
-    _reload_companies_from_db()
+    username = session.get("username", "")
+    ok = persistence_delete_current_company(company_id, username)
+    _reload_companies_from_db(username)
     if not ok:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"ok": True})
@@ -471,12 +495,14 @@ def upload_file():
                     "employees": c.employees,
                 }
                 for c in loaded
-            ]
+            ],
+            owner_username=session.get("username", ""),
         )
-        _reload_companies_from_db()
+        username = session.get("username", "")
+        _reload_companies_from_db(username)
 
         return jsonify(
-            {"ok": True, "loaded": inserted, "total": len(list_current_companies())}
+            {"ok": True, "loaded": inserted, "total": len(list_current_companies(username))}
         )
 
     except Exception as e:
@@ -486,6 +512,9 @@ def upload_file():
 @app.route("/api/scan/start", methods=["POST"])
 @login_required
 def start_scan():
+    username = session.get("username", "")
+    _reload_companies_from_db(username)
+    state = get_user_state(username)
     if state.running:
         return jsonify({"error": "Scan already running"}), 409
 
@@ -510,11 +539,12 @@ def start_scan():
                 "employees": c.employees,
             }
             for c in companies_copy
-        ]
+        ],
+        owner_username=username,
     )
     thread = threading.Thread(
         target=_scan_worker,
-        args=(companies_copy, timeout, delay, verbose, domain_list_id),
+        args=(username, companies_copy, timeout, delay, verbose, domain_list_id),
         daemon=True,
     )
     thread.start()
@@ -525,6 +555,7 @@ def start_scan():
 @app.route("/api/scan/stop", methods=["POST"])
 @login_required
 def stop_scan():
+    state = get_user_state(session.get("username", ""))
     state.stop_requested = True
     return jsonify({"ok": True})
 
@@ -532,12 +563,14 @@ def stop_scan():
 @app.route("/api/scan/status")
 @login_required
 def scan_status():
+    state = get_user_state(session.get("username", ""))
     return jsonify(state.snapshot())
 
 
 @app.route("/api/history/scans")
 @login_required
 def history_scans():
+    username = session.get("username", "")
     try:
         page = int(request.args.get("page", 1))
     except Exception:
@@ -546,13 +579,16 @@ def history_scans():
         page_size = int(request.args.get("page_size", 10))
     except Exception:
         page_size = 10
-    total, items = list_scan_runs_page(page=page, page_size=page_size)
+    total, items = list_scan_runs_page(
+        owner_username=username, page=page, page_size=page_size
+    )
     return jsonify({"page": page, "page_size": page_size, "total": total, "items": items})
 
 
 @app.route("/api/history/domain-lists")
 @login_required
 def history_domain_lists():
+    username = session.get("username", "")
     try:
         page = int(request.args.get("page", 1))
     except Exception:
@@ -561,22 +597,31 @@ def history_domain_lists():
         page_size = int(request.args.get("page_size", 10))
     except Exception:
         page_size = 10
-    total, items = list_domain_lists_page(page=page, page_size=page_size)
+    total, items = list_domain_lists_page(
+        owner_username=username, page=page, page_size=page_size
+    )
     return jsonify({"page": page, "page_size": page_size, "total": total, "items": items})
 
 
 @app.route("/api/history/domain-lists/<int:domain_list_id>")
 @login_required
 def history_domain_list_items(domain_list_id: int):
-    return jsonify({"id": domain_list_id, "items": get_domain_list_items(domain_list_id)})
+    username = session.get("username", "")
+    return jsonify(
+        {
+            "id": domain_list_id,
+            "items": get_domain_list_items(domain_list_id, username),
+        }
+    )
 
 
 @app.route("/api/history/domain-lists/<int:domain_list_id>/use", methods=["POST"])
 @login_required
 def use_history_domain_list(domain_list_id: int):
+    username = session.get("username", "")
     try:
-        count = use_domain_list_as_current(domain_list_id)
-        _reload_companies_from_db()
+        count = use_domain_list_as_current(domain_list_id, username)
+        _reload_companies_from_db(username)
         return jsonify({"ok": True, "count": count})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -586,6 +631,7 @@ def use_history_domain_list(domain_list_id: int):
 @login_required
 def scan_stream():
     """Server-Sent Events stream for live updates."""
+    state = get_user_state(session.get("username", ""))
 
     def generate():
         last_len = 0
@@ -631,6 +677,7 @@ def scan_stream():
 @login_required
 def download_pdf(domain: str):
     """Download a PDF report for a specific domain."""
+    state = get_user_state(session.get("username", ""))
     with state.lock:
         pdf_filename = state.pdf_paths.get(domain)
     if not pdf_filename:
@@ -642,6 +689,10 @@ def download_pdf(domain: str):
 @app.route("/output/<path:filename>")
 @login_required
 def serve_output(filename: str):
+    username = session.get("username", "")
+    output_path = f"/output/{filename}"
+    if not user_owns_output_path(username, output_path):
+        return jsonify({"error": "Not found"}), 404
     output_dir = Path(__file__).parent / "output"
     return send_from_directory(str(output_dir), filename)
 
