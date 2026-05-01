@@ -527,7 +527,6 @@ class PDFReportGenerator:
             ("Attack Surface", lead.attack_surface),
             ("Technology Stack", lead.tech_stack),
             ("Admin Exposure", lead.admin_panel),
-            ("Security Hiring", lead.security_hiring),
             ("Security Governance", lead.security_governance),
             ("Security Communication", lead.security_communication),
             ("NIS2 Readiness", lead.nis2_readiness),
@@ -877,7 +876,6 @@ class PDFReportGenerator:
             ("Attack Surface", lead.attack_surface),
             ("Technology Stack", lead.tech_stack),
             ("Admin Exposure", lead.admin_panel),
-            ("Security Hiring", lead.security_hiring),
             ("Security Governance", lead.security_governance),
             ("Security Communication", lead.security_communication),
             ("NIS2 Readiness", lead.nis2_readiness),
@@ -981,7 +979,6 @@ class PDFReportGenerator:
             ("subdomains", "Attack Surface / Subdomains", lead.attack_surface, lead.subdomain_result, self._appendix_subdomains),
             ("techstack", "Technology Stack", lead.tech_stack, lead.techstack_result, self._appendix_techstack),
             ("admin", "Admin Panels", lead.admin_panel, lead.admin_result, self._appendix_admin),
-            ("jobs", "Jobs / Hiring Signals", lead.security_hiring, lead.jobs_result, self._appendix_jobs),
             ("website", "Website Content Signals", lead.security_communication, lead.website_result, self._appendix_website),
             ("governance", "Security Governance", lead.security_governance, lead.governance_result, self._appendix_governance),
         ]

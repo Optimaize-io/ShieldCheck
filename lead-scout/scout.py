@@ -61,6 +61,7 @@ def _strip_lead_irrelevant_dimensions(lead: LeadScore) -> LeadScore:
     lead.compliance_priority = "UNKNOWN"
     lead.security_communication = None
     lead.security_governance = None
+    lead.security_hiring = None
 
     def keep_text(value: str) -> bool:
         text = (value or "").lower()
@@ -73,6 +74,11 @@ def _strip_lead_irrelevant_dimensions(lead: LeadScore) -> LeadScore:
             "security governance",
             "security leadership",
             "ciso",
+            "security hiring",
+            "security role",
+            "security jobs",
+            "jobs page",
+            "careers/jobs page",
         ]
         return not any(term in text for term in blocked_terms)
 
@@ -99,7 +105,6 @@ def _strip_lead_irrelevant_dimensions(lead: LeadScore) -> LeadScore:
         lead.attack_surface,
         lead.tech_stack,
         lead.admin_panel,
-        lead.security_hiring,
     ]
     analyzed_dimensions = [d for d in dimensions if d and d.analyzed]
     lead.total_score = float(sum(d.score for d in analyzed_dimensions))
