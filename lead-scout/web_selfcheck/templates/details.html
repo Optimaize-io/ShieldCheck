@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Send report - ShieldCheck</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='selfcheck.css') }}">
+</head>
+<body>
+<main class="page">
+    <section class="split-band split-band-modern">
+        <div class="band summary-panel">
+            <div class="step-pill">Step 2 of 3</div>
+            <h1>Where should we send the PDF report?</h1>
+            <p class="lede">
+                Your self-check for <strong>{{ row.domain }}</strong> is ready. Enter the contact details and continue to the web report.
+            </p>
+            <dl class="summary-list">
+                <div><dt>Domain</dt><dd>{{ row.domain }}</dd></div>
+                <div><dt>Score</dt><dd>{{ "%.1f"|format(row.total_score or 0) }}/{{ "%.0f"|format(row.max_score or 0) }}</dd></div>
+                <div><dt>Findings</dt><dd>{{ row.findings_count or 0 }}</dd></div>
+                <div><dt>Security posture</dt><dd>{{ posture_label }}</dd></div>
+            </dl>
+            <div class="summary-note">
+                The web report opens immediately after this step, so you can review the results while the PDF is also sent to your inbox.
+            </div>
+        </div>
+        <div class="band form-panel">
+            <div class="panel-head">
+                <div class="eyebrow">Delivery</div>
+                <h2>Report recipient</h2>
+                <p>Use the address that should receive the PDF version of the assessment.</p>
+            </div>
+            <form class="details-form" method="post">
+                <label class="field-label" for="contact_name">Name</label>
+                <input id="contact_name" name="contact_name" type="text" placeholder="Jane Doe">
+
+                <label class="field-label" for="contact_email">Email address</label>
+                <input id="contact_email" name="contact_email" type="email" placeholder="jane@example.nl" required>
+
+                {% if error %}
+                <div class="form-error">{{ error }}</div>
+                {% endif %}
+
+                <button type="submit">Open report</button>
+                <p class="form-note">We will send the PDF report to this address and then open the web version here.</p>
+            </form>
+        </div>
+    </section>
+</main>
+</body>
+</html>

@@ -494,13 +494,7 @@ function showDetail(idx) {
     attack_surface: "Attack Surface",
     tech_stack: "Tech Stack",
     admin_panel: "Admin Exposure",
-    security_hiring: "Security Hiring",
-    security_governance: "Security Governance",
-    security_communication: "Security Communication",
-    nis2_readiness: "NIS2 Readiness",
   };
-
-  const nis2 = r.nis2 || {};
 
   let html = `
         <div class="detail-grid">
@@ -508,8 +502,6 @@ function showDetail(idx) {
             <div><div class="detail-item-label">Sector</div><div class="detail-item-value">${esc(r.sector)}</div></div>
             <div><div class="detail-item-label">Employees</div><div class="detail-item-value">${r.employees}</div></div>
             <div><div class="detail-item-label">Score</div><div class="detail-item-value">${r.total_score.toFixed(1)} / ${r.max_score}</div></div>
-            <div><div class="detail-item-label">NIS2 Covered</div><div class="detail-item-value">${nis2.covered ? "Yes" : "No"}</div></div>
-            <div><div class="detail-item-label">Compliance Priority</div><div class="detail-item-value">${esc(nis2.compliance_priority || "N/A")}</div></div>
         </div>
     `;
 

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanning {{ domain }} - ShieldCheck</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='selfcheck.css') }}">
+</head>
+<body>
+<main class="page">
+    <section class="scan-layout">
+        <div class="scan-main band">
+            <div class="step-pill">Step 1 of 3</div>
+            <h1>Scanning {{ domain }}</h1>
+            <p class="lede">We are checking the public signals around your domain and assembling the first report.</p>
+
+            <div class="progress-shell progress-shell-modern">
+                <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width: 8%;"></div></div>
+                <div class="progress-meta">
+                    <span id="stepLabel">Preparing scan</span>
+                    <span id="progressLabel">0 / 1</span>
+                </div>
+            </div>
+
+            <div class="scan-stat-grid">
+                <div class="scan-stat">
+                    <div class="scan-stat-label">Domain</div>
+                    <div class="scan-stat-value">{{ domain }}</div>
+                </div>
+                <div class="scan-stat">
+                    <div class="scan-stat-label">Checks</div>
+                    <div class="scan-stat-value">Public-only</div>
+                </div>
+                <div class="scan-stat">
+                    <div class="scan-stat-label">Next step</div>
+                    <div class="scan-stat-value">PDF details</div>
+                </div>
+            </div>
+
+            <div id="errorBox" class="form-error" style="display:none"></div>
+            <div class="log-shell">
+                <div class="log-shell-head">Live scan log</div>
+                <div id="logBox" class="log-box"></div>
+            </div>
+        </div>
+        <aside class="scan-aside band">
+            <div class="eyebrow">In progress</div>
+            <h2>What is being checked</h2>
+            <ul class="modern-list">
+                <li>Email authentication records such as SPF, DMARC, and DKIM</li>
+                <li>Exposed internet services and certificate hygiene</li>
+                <li>Security headers, cookies, and visible website controls</li>
+                <li>Public signs that NIS2 readiness is already being addressed</li>
+            </ul>
+        </aside>
+    </section>
+</main>
+
+<script>
+const token = "{{ token }}";
+const progressFill = document.getElementById("progressFill");
+const stepLabel = document.getElementById("stepLabel");
+const progressLabel = document.getElementById("progressLabel");
+const errorBox = document.getElementById("errorBox");
+const logBox = document.getElementById("logBox");
+
+function renderStatus(data) {
+    const total = data.total || 1;
+    const progress = data.progress || 0;
+    const pct = Math.max(8, Math.round((progress / total) * 100));
+    progressFill.style.width = pct + "%";
+    stepLabel.textContent = data.current_step || "Running checks";
+    progressLabel.textContent = `${progress} / ${total}`;
+    logBox.textContent = (data.log || []).join("\n");
+    logBox.scrollTop = logBox.scrollHeight;
+
+    if (data.error) {
+        errorBox.style.display = "block";
+        errorBox.textContent = data.error;
+    }
+
+    if (data.next_url) {
+        window.location.href = data.next_url;
+    }
+}
+
+async function poll() {
+    const response = await fetch(`{{ url_for('selfcheck.self_check_status', token='__TOKEN__') }}`.replace('__TOKEN__', token));
+    if (!response.ok) {
+        errorBox.style.display = "block";
+        errorBox.textContent = "Unable to load scan status.";
+        return;
+    }
+    const data = await response.json();
+    renderStatus(data);
+    if (!data.next_url && data.status !== "failed") {
+        setTimeout(poll, 1200);
+    }
+}
+
+poll();
+</script>
+</body>
+</html>

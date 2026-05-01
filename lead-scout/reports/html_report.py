@@ -122,14 +122,18 @@ class HTMLReportGenerator:
         
         sectors_json = json.dumps(sector_counts, ensure_ascii=False)
         
-        # Calculate NIS2 priority distribution  
-        priority_counts = {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'UNKNOWN': 0, 'CRITICAL': 0}
+        # Calculate findings distribution for lead review
+        findings_counts = {"High": 0, "Medium": 0, "Low": 0}
         for lead in leads_data:
-            priority = lead.get('nis2', {}).get('compliance_priority', 'UNKNOWN')
-            if priority in priority_counts:
-                priority_counts[priority] += 1
-        
-        priority_json = json.dumps(priority_counts, ensure_ascii=False)
+            findings = int(lead.get("findings_count") or 0)
+            if findings >= 6:
+                findings_counts["High"] += 1
+            elif findings >= 3:
+                findings_counts["Medium"] += 1
+            else:
+                findings_counts["Low"] += 1
+
+        findings_json = json.dumps(findings_counts, ensure_ascii=False)
         
         # Use string replacement to avoid conflicts with CSS curly braces
         html = self._get_html_template()
@@ -140,7 +144,7 @@ class HTMLReportGenerator:
         html = html.replace('__COOL_COUNT__', str(cool_count))
         html = html.replace('__LEADS_JSON__', leads_json)
         html = html.replace('__SECTORS_JSON__', sectors_json)
-        html = html.replace('__PRIORITY_JSON__', priority_json)
+        html = html.replace('__PRIORITY_JSON__', findings_json)
         return html
     
     def _get_html_template(self) -> str:
@@ -209,7 +213,7 @@ class HTMLReportGenerator:
                 </div>
             </div>
             <div class="chart-card">
-                <h3>⚠️ NIS2 Compliance Priority</h3>
+                <h3>⚠️ Findings Severity</h3>
                 <div class="chart-container">
                     <canvas id="priorityChart"></canvas>
                 </div>
@@ -1476,10 +1480,6 @@ a.btn {
                 `;
             })();
             
-            const nis2Status = lead.nis2 && lead.nis2.covered 
-                ? `Covered as ${lead.nis2.entity_type} entity in ${lead.nis2.sector}`
-                : 'Not applicable';
-            
             body.innerHTML = `
                 <div class="company-info">
                     <div class="info-item">
@@ -1497,14 +1497,6 @@ a.btn {
                     <div class="info-item">
                         <label>Overall Score</label>
                         <div class="value">${lead.total_score}/${Math.round(lead.max_score)}</div>
-                    </div>
-                    <div class="info-item">
-                        <label>NIS2 Status</label>
-                        <div class="value">${nis2Status}</div>
-                    </div>
-                    <div class="info-item">
-                        <label>Compliance Priority</label>
-                        <div class="value">${lead.nis2?.compliance_priority || 'UNKNOWN'}</div>
                     </div>
                 </div>
                 
@@ -1849,7 +1841,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Jobs -->
-                    ${raw.jobs ? `
+                    ${false && raw.jobs ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Security Hiring Signals</span>
@@ -1899,7 +1891,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Website -->
-                    ${raw.website ? `
+                    ${false && raw.website ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Website Signals (Security & NIS2)</span>
@@ -1957,7 +1949,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Governance -->
-                    ${raw.governance ? `
+                    ${false && raw.governance ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Governance Signals</span>
@@ -2078,7 +2070,7 @@ a.btn {
         
         // Export CSV
         function exportCSV() {
-            const headers = ['Rank', 'Company', 'Domain', 'Sector', 'Employees', 'Score', 'Max Score', 'Tier', 'Findings', 'Key Gaps', 'NIS2 Covered', 'Compliance Priority'];
+            const headers = ['Rank', 'Company', 'Domain', 'Sector', 'Employees', 'Score', 'Max Score', 'Tier', 'Findings', 'Key Gaps'];
             const rows = filteredLeads.map((lead, i) => [
                 i + 1,
                 lead.company_name,
@@ -2089,9 +2081,7 @@ a.btn {
                 lead.max_score,
                 lead.tier.replace('🔴 ', '').replace('🟠 ', '').replace('🟢 ', ''),
                 lead.findings_count || 0,
-                lead.key_gaps.join('; '),
-                lead.nis2?.covered ? 'Yes' : 'No',
-                lead.nis2?.compliance_priority || 'UNKNOWN'
+                lead.key_gaps.join('; ')
             ]);
             
             const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\\n');
