@@ -495,7 +495,6 @@ function showDetail(idx) {
     tech_stack: "Tech Stack",
     admin_panel: "Admin Exposure",
     security_hiring: "Security Hiring",
-    security_governance: "Security Governance",
   };
 
   let html = `
