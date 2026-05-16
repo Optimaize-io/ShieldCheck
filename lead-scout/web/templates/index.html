@@ -4,190 +4,293 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lead Scout — NIS2 Security Scanner</title>
+    <title>Lead Scout - NIS2 Security Scanner</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
 <body>
-
-    <!-- ═══ Header ═══ -->
     <header class="header">
         <div>
             <h1>Lead Scout <span class="accent">Web</span></h1>
-            <p class="header-meta">NIS2 OSINT Security Scanner</p>
+            <p class="header-meta">{{ account_name }} - {{ plan_name }}</p>
         </div>
         <div class="header-user">
-            <span>{{ username }}</span>
+            <div class="header-user-meta">
+                <span>{{ username }}</span>
+                <span class="header-role">{{ role }}</span>
+            </div>
             <a href="/logout" class="btn-logout">Logout</a>
         </div>
     </header>
 
     <main class="dashboard">
-        <!-- ═══ Controls ═══ -->
-        <section class="section controls-bar">
-            <div class="controls-row">
-                <button class="btn btn-primary" onclick="openUploadModal()">📂 Load File</button>
-                <button class="btn btn-secondary" onclick="openAddModal()">＋ Add Company</button>
-                <button class="btn btn-ghost" onclick="clearCompanies()">🗑 Clear All</button>
+        <section class="section collapsible-section" id="scanningSection">
+            <button class="section-toggle" type="button" onclick="toggleSection('scanningSection')">
+                <span>Scanning</span>
+                <span class="section-toggle-icon">-</span>
+            </button>
+            <div class="section-panel-body">
+                <section class="section nested-section controls-bar">
+                    <div class="controls-row">
+                        <button class="btn btn-primary" onclick="openUploadModal()">Load File</button>
+                        <button class="btn btn-secondary" onclick="openAddModal()">Add Company</button>
+                        <button class="btn btn-ghost" onclick="clearCompanies()">Clear All</button>
 
-                <div class="spacer"></div>
+                        <div class="spacer"></div>
 
-                <label class="ctrl-label">Timeout
-                    <input type="number" id="cfgTimeout" value="8" min="1" max="60" class="ctrl-input">
-                    <span class="ctrl-unit">s</span>
-                </label>
-                <label class="ctrl-label">Delay
-                    <input type="number" id="cfgDelay" value="1" min="0" max="30" class="ctrl-input">
-                    <span class="ctrl-unit">s</span>
-                </label>
-                <label class="ctrl-label">
-                    <input type="checkbox" id="cfgVerbose"> Verbose
-                </label>
+                        <label class="ctrl-label">Timeout
+                            <input type="number" id="cfgTimeout" value="8" min="1" max="60" class="ctrl-input">
+                            <span class="ctrl-unit">s</span>
+                        </label>
+                        <label class="ctrl-label">Delay
+                            <input type="number" id="cfgDelay" value="1" min="0" max="30" class="ctrl-input">
+                            <span class="ctrl-unit">s</span>
+                        </label>
+                        <label class="ctrl-label">
+                            <input type="checkbox" id="cfgVerbose"> Verbose
+                        </label>
 
-                <div class="spacer"></div>
+                        <div class="spacer"></div>
 
-                <button class="btn btn-scan" id="btnStartScan" onclick="startScan()">▶ Start Scan</button>
-                <button class="btn btn-danger" id="btnStopScan" onclick="stopScan()" disabled>■ Stop</button>
-            </div>
-        </section>
+                        <button class="btn btn-scan" id="btnStartScan" onclick="startScan()">Start Scan</button>
+                        <button class="btn btn-danger" id="btnStopScan" onclick="stopScan()" disabled>Stop</button>
+                    </div>
+                </section>
 
-        <!-- ═══ Company Input Table ═══ -->
-        <section class="section">
-            <h2>📋 Companies to Scan <span id="companyCount" class="badge">0</span></h2>
-            <div class="table-wrap">
-                <table class="data-table" id="companyTable">
-                    <thead>
-                        <tr>
-                            <th style="width:40px">#</th>
-                            <th>Company Name</th>
-                            <th>Domain</th>
-                            <th>Sector</th>
-                            <th>Employees</th>
-                            <th style="width:50px"></th>
-                        </tr>
-                    </thead>
-                    <tbody id="companyBody"></tbody>
-                </table>
-                <div id="companyEmpty" class="empty-msg">No companies loaded yet. Upload a CSV/JSON file or add
-                    companies manually.</div>
-            </div>
-        </section>
-
-        <!-- ═══ Progress ═══ -->
-        <section class="section" id="progressSection" style="display:none">
-            <h2>⏳ Scan Progress</h2>
-            <div class="progress-bar-wrap">
-                <div class="progress-bar" id="progressBar" style="width:0%"></div>
-            </div>
-            <div class="progress-text" id="progressText">0 / 0</div>
-        </section>
-
-        <!-- ═══ Stats Cards ═══ -->
-        <section id="statsSection" style="display:none">
-            <div class="stats-grid">
-                <div class="stat-card total">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-value" id="statTotal">0</div>
-                    <div class="stat-label">Scanned</div>
-                </div>
-                <div class="stat-card hot">
-                    <div class="stat-icon">🔥</div>
-                    <div class="stat-value" id="statHot">0</div>
-                    <div class="stat-label">Hot Leads</div>
-                </div>
-                <div class="stat-card warm">
-                    <div class="stat-icon">⚡</div>
-                    <div class="stat-value" id="statWarm">0</div>
-                    <div class="stat-label">Warm Leads</div>
-                </div>
-                <div class="stat-card cool">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-value" id="statCool">0</div>
-                    <div class="stat-label">Cool Leads</div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ═══ Results Table ═══ -->
-        <section class="section" id="resultsSection" style="display:none">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem">
-                <h2>🏆 Scan Results</h2>
-                <div>
-                    <button class="btn btn-secondary" id="btnOpenReport" onclick="openReport()" style="display:none">📊
-                        Open HTML Report</button>
-                    <button class="btn btn-secondary" onclick="exportJSON()">📥 Export JSON</button>
-                </div>
-            </div>
-            <div class="table-wrap" style="margin-top:1rem">
-                <table class="data-table" id="resultsTable">
-                    <thead>
-                        <tr>
-                            <th style="width:50px">#</th>
-                            <th>Tier</th>
-                            <th>Company</th>
-                            <th>Domain</th>
-                            <th>Score</th>
-                            <th>Findings</th>
-                            <th>Sector</th>
-                            <th style="width:50px"></th>
-                        </tr>
-                    </thead>
-                    <tbody id="resultsBody"></tbody>
-                </table>
-            </div>
-        </section>
-
-        <!-- ═══ Log Output ═══ -->
-        <section class="section" id="logSection" style="display:none">
-            <h2>📜 Scan Log</h2>
-            <div class="log-box" id="logBox"></div>
-        </section>
-
-        <!-- ═══ History (Persistent) ═══ -->
-        <section class="section" id="historySection">
-            <h2>⏪ History (Persistent)</h2>
-            <div class="history-grid">
-                <div>
-                    <div class="history-header">
-                        <h3>HTML Scan Overviews</h3>
+                <section class="section nested-section" id="companySection">
+                    <div class="section-title-row">
+                        <h2>Companies to Scan <span id="companyCount" class="badge">0</span></h2>
+                        <div class="toolbar-inline">
+                            <input type="search" id="companySearch" name="company_search" class="form-input compact-input" placeholder="Search companies" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                        </div>
                     </div>
                     <div class="table-wrap">
-                        <table class="data-table" id="scanHistoryTable">
+                        <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th>Date/Time</th>
-                                    <th style="width:140px">Domains</th>
-                                    <th style="width:120px"></th>
+                                    <th style="width:40px">#</th>
+                                    <th>Company Name</th>
+                                    <th>Domain</th>
+                                    <th>Sector</th>
+                                    <th>Employees</th>
+                                    <th style="width:50px"></th>
                                 </tr>
                             </thead>
-                            <tbody id="scanHistoryBody"></tbody>
+                            <tbody id="companyBody"></tbody>
                         </table>
-                        <div class="pager" id="scanHistoryPager"></div>
+                        <div id="companyEmpty" class="empty-msg">No companies loaded yet.</div>
+                    </div>
+                </section>
+
+                <section class="section nested-section" id="progressSection" style="display:none">
+                    <h2>Scan Progress</h2>
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar" id="progressBar" style="width:0%"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0 / 0</div>
+                </section>
+
+                <section class="nested-section" id="statsSection" style="display:none">
+                    <div class="stats-grid">
+                        <div class="stat-card total">
+                            <div class="stat-value" id="statTotal">0</div>
+                            <div class="stat-label">Scanned</div>
+                        </div>
+                        <div class="stat-card hot">
+                            <div class="stat-value" id="statHot">0</div>
+                            <div class="stat-label">Hot Leads</div>
+                        </div>
+                        <div class="stat-card warm">
+                            <div class="stat-value" id="statWarm">0</div>
+                            <div class="stat-label">Warm Leads</div>
+                        </div>
+                        <div class="stat-card cool">
+                            <div class="stat-value" id="statCool">0</div>
+                            <div class="stat-label">Cool Leads</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section nested-section" id="resultsSection" style="display:none">
+                    <div class="section-title-row">
+                        <h2>Scan Results</h2>
+                        <div class="toolbar-inline">
+                            <input type="search" id="resultSearch" name="result_search" class="form-input compact-input" placeholder="Search results" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                            <select id="resultSort" class="form-input compact-input">
+                                <option value="default">Current order</option>
+                                <option value="scoreAsc">Score low to high</option>
+                                <option value="scoreDesc">Score high to low</option>
+                                <option value="companyAsc">Company A-Z</option>
+                            </select>
+                            <button class="btn btn-secondary" id="btnOpenReport" onclick="openReport()" style="display:none">Open HTML Report</button>
+                            <button class="btn btn-secondary" onclick="exportJSON()">Export JSON</button>
+                            <button class="btn btn-secondary" onclick="exportCSV()">Export CSV</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap" style="margin-top:1rem">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:50px">#</th>
+                                    <th>Tier</th>
+                                    <th>Company</th>
+                                    <th>Domain</th>
+                                    <th>Score</th>
+                                    <th>Findings</th>
+                                    <th>Status</th>
+                                    <th style="width:90px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="resultsBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="section nested-section" id="logSection" style="display:none">
+                    <h2>Scan Log</h2>
+                    <div class="log-box" id="logBox"></div>
+                </section>
+            </div>
+        </section>
+
+        <section class="section collapsible-section" id="historySection">
+            <button class="section-toggle" type="button" onclick="toggleSection('historySection')">
+                <span>History</span>
+                <span class="section-toggle-icon">-</span>
+            </button>
+            <div class="section-panel-body">
+                <div class="history-grid">
+                    <div>
+                        <div class="history-header">
+                            <h3>HTML Scan Overviews</h3>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date/Time</th>
+                                        <th style="width:140px">Domains</th>
+                                        <th style="width:120px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="scanHistoryBody"></tbody>
+                            </table>
+                            <div class="pager" id="scanHistoryPager"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="history-header">
+                            <h3>Domain Lists Used For Scans</h3>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date/Time</th>
+                                        <th style="width:140px">Domains</th>
+                                        <th style="width:220px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="domainListHistoryBody"></tbody>
+                            </table>
+                            <div class="pager" id="domainListHistoryPager"></div>
+                        </div>
                     </div>
                 </div>
-                <div>
-                    <div class="history-header">
-                        <h3>Domain Lists Used For Scans</h3>
+            </div>
+        </section>
+
+        <section class="section collapsible-section" id="overviewSection">
+            <button class="section-toggle" type="button" onclick="toggleSection('overviewSection')">
+                <span>Account Overview</span>
+                <span class="section-toggle-icon">-</span>
+            </button>
+            <div class="section-panel-body">
+                <div class="section-title-row">
+                    <div>
+                        <p class="section-meta" id="accountMeta">Loading account...</p>
                     </div>
-                    <div class="table-wrap">
-                        <table class="data-table" id="domainListHistoryTable">
-                            <thead>
-                                <tr>
-                                    <th>Date/Time</th>
-                                    <th style="width:140px">Domains</th>
-                                    <th style="width:220px"></th>
-                                </tr>
-                            </thead>
-                            <tbody id="domainListHistoryBody"></tbody>
-                        </table>
-                        <div class="pager" id="domainListHistoryPager"></div>
+                    <div class="balance-pills">
+                        <span class="pill pill-total">Total <strong id="balanceTotal">0</strong></span>
+                        <span class="pill">Monthly <strong id="balanceMonthly">0</strong></span>
+                        <span class="pill">Purchased <strong id="balancePurchased">0</strong></span>
+                        <span class="pill">Granted <strong id="balanceGranted">0</strong></span>
+                    </div>
+                </div>
+                <div class="overview-grid">
+                    <div class="overview-card">
+                        <div class="overview-label">Plan</div>
+                        <div class="overview-value" id="planName">-</div>
+                        <div class="overview-sub" id="billingCycle">-</div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-label">Users</div>
+                        <div class="overview-value" id="userUsage">-</div>
+                        <div class="overview-sub"></div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-label">Monthly Allocation</div>
+                        <div class="overview-value" id="monthlyAllocation">-</div>
+                        <div class="overview-sub" id="refreshAt">-</div>
+                    </div>
+                    <div class="overview-card">
+                        <div class="overview-label">Subscription</div>
+                        <div class="overview-value" id="subscriptionStatus">-</div>
+                        <div class="overview-sub"></div>
+                    </div>
+                </div>
+                <div class="feature-layout">
+                    <div>
+                        <h3>Plan Features</h3>
+                        <div id="featureList" class="feature-list"></div>
+                    </div>
+                    <div>
+                        <h3>Recent Token Activity</h3>
+                        <div id="tokenLedger" class="activity-list"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section collapsible-section" id="adminSection" style="display:none">
+            <button class="section-toggle" type="button" onclick="toggleSection('adminSection')">
+                <span>Admin Controls</span>
+                <span class="section-toggle-icon">-</span>
+            </button>
+            <div class="section-panel-body">
+                <div class="section-title-row">
+                    <span class="section-meta">Shared account management</span>
+                </div>
+                <div class="admin-grid">
+                    <div>
+                        <h3>Team Users</h3>
+                        <div class="table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Role</th>
+                                        <th>Updated</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="userBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="admin-form">
+                            <input type="text" id="newUsername" name="new_account_username" class="form-input" placeholder="Username" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                            <input type="password" id="newPassword" name="new_account_password" class="form-input" placeholder="Password" autocomplete="new-password">
+                            <select id="newRole" class="form-input">
+                                <option value="member">member</option>
+                                <option value="admin">admin</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="createUser()">Create User</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </section>
     </main>
 
-    <!-- ═══ Add Company Modal ═══ -->
     <div class="modal-overlay" id="addModal">
         <div class="modal-card" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -196,16 +299,16 @@
             </div>
             <div class="modal-body">
                 <label class="form-label">Company Name *
-                    <input type="text" id="addName" class="form-input" placeholder="Acme Corp">
+                    <input type="text" id="addName" name="company_name_input" class="form-input" placeholder="Acme Corp" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
                 </label>
                 <label class="form-label">Domain *
-                    <input type="text" id="addDomain" class="form-input" placeholder="acme.nl">
+                    <input type="text" id="addDomain" name="company_domain_input" class="form-input" placeholder="acme.nl" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
                 </label>
                 <label class="form-label">Sector
-                    <input type="text" id="addSector" class="form-input" placeholder="Unknown" value="Unknown">
+                    <input type="text" id="addSector" name="company_sector_input" class="form-input" value="Unknown" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
                 </label>
                 <label class="form-label">Employees
-                    <input type="number" id="addEmployees" class="form-input" placeholder="100" value="100">
+                    <input type="number" id="addEmployees" class="form-input" value="100">
                 </label>
             </div>
             <div class="modal-footer">
@@ -215,7 +318,6 @@
         </div>
     </div>
 
-    <!-- ═══ Upload Modal ═══ -->
     <div class="modal-overlay" id="uploadModal">
         <div class="modal-card" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -223,9 +325,8 @@
                 <button class="modal-close" onclick="closeModal('uploadModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <p style="margin-bottom:1rem;color:var(--text-secondary)">Select a CSV or JSON file with columns: name,
-                    domain, sector, employees</p>
-                <input type="file" id="fileInput" accept=".csv,.json" class="form-input">
+                <p class="section-meta" style="margin-bottom:1rem">Select a CSV or JSON file with columns: name, domain, sector, employees</p>
+                <input type="file" id="fileInput" accept=".csv,.json" class="form-input" autocomplete="off">
             </div>
             <div class="modal-footer">
                 <button class="btn btn-ghost" onclick="closeModal('uploadModal')">Cancel</button>
@@ -234,7 +335,6 @@
         </div>
     </div>
 
-    <!-- ═══ Detail Modal ═══ -->
     <div class="modal-overlay" id="detailModal">
         <div class="modal-card modal-wide" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -245,7 +345,6 @@
         </div>
     </div>
 
-    <!-- ═══ Confirm Modal ═══ -->
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-card" onclick="event.stopPropagation()">
             <div class="modal-header">
@@ -253,10 +352,10 @@
                 <button class="modal-close" onclick="closeModal('confirmModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="confirmBody" style="color:var(--text-secondary);font-size:0.9rem;line-height:1.4"></div>
+                <div id="confirmBody" class="section-meta"></div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-ghost" id="confirmCancelBtn" onclick="closeModal('confirmModal')">Cancel</button>
+                <button class="btn btn-ghost" onclick="closeModal('confirmModal')">Cancel</button>
                 <button class="btn btn-primary" id="confirmOkBtn">Confirm</button>
             </div>
         </div>

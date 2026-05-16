@@ -88,6 +88,37 @@ body {
 }
 .section h2 { font-size:1.1rem; font-weight:700; margin-bottom:0.75rem; }
 .section h3 { font-size:0.95rem; font-weight:700; margin:0 0 0.5rem 0; color:var(--text-primary); }
+.nested-section {
+    margin-top:1rem;
+}
+
+.section-toggle {
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    background:none;
+    border:none;
+    color:var(--text-primary);
+    font:inherit;
+    font-size:1.05rem;
+    font-weight:700;
+    cursor:pointer;
+    padding:0;
+}
+
+.section-toggle-icon {
+    color:var(--text-secondary);
+    font-size:1rem;
+}
+
+.section-panel-body {
+    margin-top:1rem;
+}
+
+.collapsible-section.collapsed .section-panel-body {
+    display:none;
+}
 
 /* ─── History ─── */
 .history-grid {
@@ -195,6 +226,13 @@ body {
     border-bottom:1px solid var(--border-subtle);
 }
 .data-table tbody tr:hover { background:var(--bg-hover); }
+.clickable-row {
+    cursor:pointer;
+}
+
+.data-table tbody tr.selected-row {
+    background:var(--cyan-glow);
+}
 
 .empty-msg {
     padding:2rem; text-align:center; color:var(--text-muted); font-size:0.9rem;
@@ -257,6 +295,7 @@ body {
     width:90%; max-width:480px; max-height:90vh; overflow-y:auto;
 }
 .modal-wide { max-width:780px; }
+.platform-admin-modal { max-width:1100px; }
 
 .modal-header {
     display:flex; justify-content:space-between; align-items:center;
@@ -322,7 +361,14 @@ input[type=file].form-input { padding:0.4rem; }
 .header-user {
     display:flex; align-items:center; gap:0.75rem;
 }
+.header-user-meta {
+    display:flex;
+    flex-direction:column;
+    align-items:flex-end;
+    gap:0.1rem;
+}
 .header-user span { color:var(--text-secondary); font-size:0.85rem; }
+.header-role { text-transform:uppercase; letter-spacing:0.06em; font-size:0.72rem !important; color:var(--text-muted) !important; }
 .btn-logout {
     background:transparent; border:1px solid var(--border-default);
     color:var(--text-secondary); padding:0.3rem 0.7rem;
@@ -398,6 +444,278 @@ input[type=file].form-input { padding:0.4rem; }
     word-break:break-word;
 }
 
+.section-title-row {
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:1rem;
+    flex-wrap:wrap;
+}
+
+.section-meta {
+    color:var(--text-secondary);
+    font-size:0.84rem;
+    line-height:1.45;
+}
+
+.overview-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));
+    gap:1rem;
+    margin-top:1rem;
+}
+
+.overview-card {
+    background:var(--bg-elevated);
+    border:1px solid var(--border-subtle);
+    border-radius:var(--radius-md);
+    padding:1rem;
+}
+
+.overview-label {
+    color:var(--text-muted);
+    font-size:0.76rem;
+    text-transform:uppercase;
+    letter-spacing:0.05em;
+}
+
+.overview-value {
+    font-size:1.2rem;
+    font-weight:700;
+    margin-top:0.35rem;
+}
+
+.overview-sub {
+    color:var(--text-secondary);
+    font-size:0.82rem;
+    margin-top:0.25rem;
+}
+
+.balance-pills {
+    display:flex;
+    gap:0.5rem;
+    flex-wrap:wrap;
+}
+
+.pill {
+    display:inline-flex;
+    gap:0.4rem;
+    align-items:center;
+    padding:0.35rem 0.65rem;
+    border-radius:999px;
+    background:var(--bg-elevated);
+    border:1px solid var(--border-subtle);
+    color:var(--text-secondary);
+    font-size:0.82rem;
+}
+
+.pill strong {
+    color:var(--text-primary);
+    font-family:'JetBrains Mono', monospace;
+}
+
+.pill-total {
+    border-color:var(--border-focus);
+}
+
+.feature-layout {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:1rem;
+    margin-top:1.25rem;
+}
+
+.platform-detail {
+    margin-top:1.25rem;
+    padding-top:1.25rem;
+    border-top:1px solid var(--border-subtle);
+}
+
+.platform-balance-grid {
+    display:grid;
+    grid-template-columns:repeat(4, minmax(0, 1fr));
+    gap:0.8rem;
+    margin-bottom:1rem;
+}
+
+.platform-modal-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:1rem;
+    margin-top:1rem;
+}
+
+.platform-modal-form {
+    grid-template-columns:repeat(2, minmax(240px, 1fr));
+    align-items:start;
+}
+
+.platform-adjustments-grid {
+    display:grid;
+    grid-template-columns:1fr;
+    gap:0.8rem;
+}
+
+.platform-adjust-form {
+    grid-template-columns:repeat(2, minmax(240px, 1fr));
+    align-items:start;
+    margin-top:0;
+}
+
+.platform-adjust-card {
+    padding:0.9rem;
+    border:1px solid var(--border-subtle);
+    border-radius:var(--radius-sm);
+    background:var(--bg-elevated);
+}
+
+.platform-adjust-label {
+    margin-bottom:0.65rem;
+}
+
+.platform-adjust-submit {
+    grid-column:1 / -1;
+}
+
+.platform-action-btn {
+    width:100%;
+    min-height:42px;
+    white-space:normal;
+    text-align:center;
+}
+
+.platform-datetime-input {
+    color-scheme:dark;
+    background-color:var(--bg-elevated);
+    color:var(--text-primary);
+}
+
+.platform-datetime-input::-webkit-calendar-picker-indicator {
+    filter:invert(1);
+    opacity:0.9;
+    cursor:pointer;
+}
+
+.platform-datetime-input::-webkit-datetime-edit,
+.platform-datetime-input::-webkit-datetime-edit-fields-wrapper,
+.platform-datetime-input::-webkit-datetime-edit-text,
+.platform-datetime-input::-webkit-datetime-edit-month-field,
+.platform-datetime-input::-webkit-datetime-edit-day-field,
+.platform-datetime-input::-webkit-datetime-edit-year-field,
+.platform-datetime-input::-webkit-datetime-edit-hour-field,
+.platform-datetime-input::-webkit-datetime-edit-minute-field {
+    color:var(--text-primary);
+}
+
+.platform-actions-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:1rem;
+    margin-top:1.25rem;
+}
+
+.feature-list,
+.activity-list {
+    display:flex;
+    flex-direction:column;
+    gap:0.45rem;
+}
+
+.feature-item,
+.activity-item {
+    display:flex;
+    justify-content:space-between;
+    gap:1rem;
+    align-items:flex-start;
+    padding:0.65rem 0.8rem;
+    border-radius:var(--radius-sm);
+    background:var(--bg-elevated);
+    border:1px solid var(--border-subtle);
+    font-size:0.84rem;
+}
+
+.feature-item strong {
+    color:var(--text-primary);
+    text-transform:capitalize;
+}
+
+.activity-meta {
+    color:var(--text-muted);
+    font-size:0.76rem;
+    margin-top:0.2rem;
+}
+
+.activity-tag {
+    color:var(--text-secondary);
+    font-size:0.74rem;
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+    white-space:nowrap;
+}
+
+.token-delta {
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.85rem;
+    font-weight:700;
+}
+
+.token-delta.positive { color:var(--cool); }
+.token-delta.negative { color:var(--hot); }
+
+.toolbar-inline {
+    display:flex;
+    gap:0.6rem;
+    align-items:center;
+    flex-wrap:wrap;
+}
+
+.compact-input {
+    width:auto;
+    min-width:180px;
+    margin-top:0;
+}
+
+.compact-btn {
+    padding:0.35rem 0.7rem;
+    font-size:0.8rem;
+}
+
+.admin-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:1rem;
+}
+
+.admin-form {
+    display:grid;
+    grid-template-columns:repeat(4, minmax(0, 1fr));
+    gap:0.6rem;
+    margin-top:0.8rem;
+}
+
+.platform-form {
+    grid-template-columns:repeat(5, minmax(0, 1fr));
+}
+
+.admin-help {
+    margin-top:0.8rem;
+    color:var(--text-secondary);
+    font-size:0.82rem;
+    line-height:1.45;
+}
+
+.textarea-input {
+    resize:vertical;
+    min-height:120px;
+}
+
+.compact-empty {
+    padding:1rem;
+    border:1px dashed var(--border-subtle);
+    border-radius:var(--radius-sm);
+    background:transparent;
+}
+
 /* ─── Checkbox ─── */
 input[type=checkbox] { accent-color:var(--cyan); }
 
@@ -409,4 +727,15 @@ input[type=checkbox] { accent-color:var(--cyan); }
     .stats-grid { grid-template-columns:repeat(2,1fr); }
     .history-grid { grid-template-columns:1fr; }
     .detail-grid { grid-template-columns:1fr; }
+    .feature-layout { grid-template-columns:1fr; }
+    .admin-grid { grid-template-columns:1fr; }
+    .admin-form { grid-template-columns:1fr; }
+    .platform-balance-grid { grid-template-columns:repeat(2, 1fr); }
+    .platform-modal-grid { grid-template-columns:1fr; }
+    .platform-adjustments-grid { grid-template-columns:1fr; }
+    .platform-actions-grid { grid-template-columns:1fr; }
+    .platform-form { grid-template-columns:1fr; }
+    .platform-modal-form { grid-template-columns:1fr; }
+    .platform-adjust-form { grid-template-columns:1fr; }
+    .header-user-meta { align-items:center; }
 }
