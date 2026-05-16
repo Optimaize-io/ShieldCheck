@@ -10,6 +10,7 @@ const HISTORY_PAGE_SIZE = 10;
 let confirmAction = null;
 let appMode = "account";
 let selectedPlatformAccountId = null;
+let currentTableSort = { column: "rank", direction: "asc" };
 
 function openModal(id) {
   document.getElementById(id).classList.add("active");
@@ -76,6 +77,86 @@ function fmtFeatureValue(value) {
   return String(value).replaceAll("_", " ");
 }
 
+function featureEnabled(key) {
+  const value = accountSummary?.features?.[key];
+  return ![null, false, "", "no", "false"].includes(value);
+}
+
+function filterMode() {
+  if (featureEnabled("advanced_filters")) return "advanced";
+  if (accountSummary?.features?.filter_sorting === true) return "basic";
+  if (accountSummary?.features?.filter_sorting === "limited") return "search_only";
+  return "none";
+}
+
+function leadWorkspaceEnabled() {
+  return featureEnabled("lead_notes") || featureEnabled("follow_up_status");
+}
+
+function updateFeatureControlledUI() {
+  const mode = filterMode();
+  const sortEl = document.getElementById("resultSort");
+  const tierFilterEl = document.getElementById("resultTierFilter");
+  const sectorFilterEl = document.getElementById("resultSectorFilter");
+  const statusFilterEl = document.getElementById("resultStatusFilter");
+  const advancedFilterIds = [
+    "resultStatusFilter",
+    "resultScoreMin",
+    "resultScoreMax",
+    "resultFindingsMin",
+    "resultFindingsMax",
+    "resultEmployeesMin",
+    "resultEmployeesMax",
+  ];
+  if (sortEl) {
+    sortEl.style.display = mode === "advanced" ? "" : "none";
+    if (mode !== "advanced") {
+      sortEl.value = "default";
+    }
+  }
+  if (tierFilterEl) {
+    tierFilterEl.style.display = mode === "basic" || mode === "advanced" ? "" : "none";
+    if (mode !== "basic" && mode !== "advanced") {
+      tierFilterEl.value = "";
+    }
+  }
+  if (sectorFilterEl) {
+    sectorFilterEl.style.display = mode === "basic" || mode === "advanced" ? "" : "none";
+    if (mode !== "basic" && mode !== "advanced") {
+      sectorFilterEl.value = "";
+    }
+  }
+  if (statusFilterEl) {
+    statusFilterEl.style.display = mode === "advanced" && featureEnabled("follow_up_status") ? "" : "none";
+    if (mode !== "advanced" || !featureEnabled("follow_up_status")) {
+      statusFilterEl.value = "";
+    }
+  }
+  advancedFilterIds.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const shouldShow = mode === "advanced" && (id !== "resultStatusFilter" || featureEnabled("follow_up_status"));
+    el.style.display = shouldShow ? "" : "none";
+    if (!shouldShow && "value" in el) {
+      el.value = "";
+    }
+  });
+
+  const statusHeader = document.getElementById("resultStatusHeader");
+  if (statusHeader) statusHeader.style.display = featureEnabled("follow_up_status") ? "" : "none";
+  const sortableHeaders = document.querySelectorAll("[data-sort-key]");
+  sortableHeaders.forEach((header) => {
+    header.style.cursor = mode === "advanced" ? "pointer" : "";
+    header.title = mode === "advanced" ? "Sort" : "";
+  });
+
+  const expandedHistory = featureEnabled("expanded_scan_history");
+  ["scanHistoryHotHeader", "scanHistoryWarmHeader", "scanHistoryCoolHeader"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = expandedHistory ? "" : "none";
+  });
+}
+
 function tierClassFor(tier) {
   const t = String(tier || "").toUpperCase();
   if (t.includes("HOT")) return "hot";
@@ -134,6 +215,7 @@ async function loadAccountSummary() {
   const isAdmin = accountSummary.viewer.role === "admin";
   setSectionVisibility("overviewSection", isAdmin);
   setSectionVisibility("adminSection", isAdmin);
+  updateFeatureControlledUI();
 
   if (isAdmin) {
     document.getElementById("accountMeta").textContent =
@@ -386,6 +468,7 @@ function renderFeatures(features) {
     cybersecurity_lead_score: "Cybersecurity lead score",
     clear_explanation_of_findings: "Clear explanation of findings",
     basic_scan_history: "Basic scan history",
+    expanded_scan_history: "Expanded scan history",
     basic_pdf_report: "Basic PDF report",
     csv_export: "CSV export",
     filter_sorting: "Filter and sorting",
@@ -514,6 +597,106 @@ function refreshCompanyTable() {
   });
 }
 
+function refreshResultFilterOptions() {
+  const sectorFilter = document.getElementById("resultSectorFilter");
+  const statusFilter = document.getElementById("resultStatusFilter");
+  const previousSector = sectorFilter?.value || "";
+  const previousStatus = statusFilter?.value || "";
+  const sectors = Array.from(new Set(results.map((result) => String(result.sector || "Unknown"))))
+    .sort((a, b) => a.localeCompare(b));
+  if (sectorFilter) {
+    sectorFilter.innerHTML = `<option value="">All Sectors</option>`;
+    sectors.forEach((sector) => {
+      const option = document.createElement("option");
+      option.value = sector;
+      option.textContent = sector;
+      sectorFilter.appendChild(option);
+    });
+    sectorFilter.value = sectors.includes(previousSector) ? previousSector : "";
+  }
+  if (statusFilter) {
+    const statuses = Array.from(
+      new Set(
+        results
+          .map((result) => String(result.follow_up_status || ""))
+          .filter((value) => value),
+      ),
+    );
+    const allowedStatuses = accountSummary?.allowed_follow_up_statuses || statuses;
+    statusFilter.innerHTML = `<option value="">All Statuses</option>`;
+    allowedStatuses.forEach((status) => {
+      const option = document.createElement("option");
+      option.value = status;
+      option.textContent = status;
+      statusFilter.appendChild(option);
+    });
+    statusFilter.value = allowedStatuses.includes(previousStatus) ? previousStatus : "";
+  }
+}
+
+function sortableValue(result, column) {
+  switch (column) {
+    case "company":
+      return String(result.company_name || "").toLowerCase();
+    case "domain":
+      return String(result.domain || "").toLowerCase();
+    case "sector":
+      return String(result.sector || "").toLowerCase();
+    case "employees":
+      return Number(result.employees || 0);
+    case "score":
+      return Number(result.total_score || 0);
+    case "tier":
+      return String(result.tier || "").toUpperCase();
+    case "findings":
+      return Number(result.findings_count || 0);
+    case "status":
+      return String(result.follow_up_status || "").toLowerCase();
+    case "rank":
+    default:
+      return Number(result.total_score || 0);
+  }
+}
+
+function applyAdvancedSort(items) {
+  if (filterMode() !== "advanced") return items;
+  const manualSort = document.getElementById("resultSort")?.value || "default";
+  if (manualSort === "scoreAsc") {
+    items.sort((a, b) => a.total_score - b.total_score);
+    return items;
+  }
+  if (manualSort === "scoreDesc") {
+    items.sort((a, b) => b.total_score - a.total_score);
+    return items;
+  }
+  if (manualSort === "companyAsc") {
+    items.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)));
+    return items;
+  }
+  const directionFactor = currentTableSort.direction === "desc" ? -1 : 1;
+  items.sort((a, b) => {
+    const aVal = sortableValue(a, currentTableSort.column);
+    const bVal = sortableValue(b, currentTableSort.column);
+    if (aVal < bVal) return -1 * directionFactor;
+    if (aVal > bVal) return 1 * directionFactor;
+    return 0;
+  });
+  return items;
+}
+
+function setTableSort(column) {
+  if (filterMode() !== "advanced") return;
+  if (currentTableSort.column === column) {
+    currentTableSort.direction = currentTableSort.direction === "asc" ? "desc" : "asc";
+  } else {
+    currentTableSort.column = column;
+    currentTableSort.direction = "asc";
+  }
+  const sortSelect = document.getElementById("resultSort");
+  if (sortSelect) sortSelect.value = "default";
+  updateResults(results);
+}
+
 async function loadCompanies() {
   if (appMode !== "account") return;
   companies = await apiJson("/api/companies");
@@ -622,10 +805,17 @@ async function loadScanHistory(page = scanHistoryPage) {
   const tbody = document.getElementById("scanHistoryBody");
   tbody.innerHTML = "";
   (data.items || []).forEach((item) => {
+    const expandedHistory = featureEnabled("expanded_scan_history");
+    const hotCell = expandedHistory ? `<td>${item.hot_leads_count ?? 0}</td>` : "";
+    const warmCell = expandedHistory ? `<td>${item.warm_leads_count ?? 0}</td>` : "";
+    const coolCell = expandedHistory ? `<td>${item.cool_leads_count ?? 0}</td>` : "";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${fmtDateTime(item.created_at)}</td>
       <td>${item.domain_count ?? ""}</td>
+      ${hotCell}
+      ${warmCell}
+      ${coolCell}
       <td><button class="btn btn-secondary compact-btn" onclick="openHistoryReport('${esc(item.report_html_path)}')">Open</button></td>
     `;
     tbody.appendChild(tr);
@@ -786,28 +976,77 @@ function updateProgress(data) {
 function filteredResults() {
   const query = document.getElementById("resultSearch").value.trim().toLowerCase();
   const sort = document.getElementById("resultSort").value;
+  const tierFilter = document.getElementById("resultTierFilter")?.value || "";
+  const sectorFilter = document.getElementById("resultSectorFilter")?.value || "";
+  const statusFilter = document.getElementById("resultStatusFilter")?.value || "";
+  const scoreMin = document.getElementById("resultScoreMin")?.value;
+  const scoreMax = document.getElementById("resultScoreMax")?.value;
+  const findingsMin = document.getElementById("resultFindingsMin")?.value;
+  const findingsMax = document.getElementById("resultFindingsMax")?.value;
+  const employeesMin = document.getElementById("resultEmployeesMin")?.value;
+  const employeesMax = document.getElementById("resultEmployeesMax")?.value;
   let visible = [...results];
 
   if (query) {
     visible = visible.filter((result) =>
-      [result.company_name, result.domain, result.sector, result.follow_up_status].some((value) =>
+      [
+        result.company_name,
+        result.domain,
+        result.sector,
+        featureEnabled("follow_up_status") ? result.follow_up_status : "",
+      ].some((value) =>
         String(value || "").toLowerCase().includes(query),
       ),
     );
   }
 
-  if (sort === "scoreAsc") {
-    visible.sort((a, b) => a.total_score - b.total_score);
-  } else if (sort === "scoreDesc") {
-    visible.sort((a, b) => b.total_score - a.total_score);
-  } else if (sort === "companyAsc") {
-    visible.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)));
+  if (filterMode() === "basic" || filterMode() === "advanced") {
+    if (tierFilter) {
+      visible = visible.filter((result) => String(result.tier || "").toUpperCase().includes(tierFilter));
+    }
+    if (sectorFilter) {
+      visible = visible.filter((result) => String(result.sector || "Unknown") === sectorFilter);
+    }
+  }
+
+  if (filterMode() === "advanced") {
+    if (statusFilter && featureEnabled("follow_up_status")) {
+      visible = visible.filter((result) => String(result.follow_up_status || "") === statusFilter);
+    }
+    if (scoreMin !== "") {
+      visible = visible.filter((result) => Number(result.total_score || 0) >= Number(scoreMin));
+    }
+    if (scoreMax !== "") {
+      visible = visible.filter((result) => Number(result.total_score || 0) <= Number(scoreMax));
+    }
+    if (findingsMin !== "") {
+      visible = visible.filter((result) => Number(result.findings_count || 0) >= Number(findingsMin));
+    }
+    if (findingsMax !== "") {
+      visible = visible.filter((result) => Number(result.findings_count || 0) <= Number(findingsMax));
+    }
+    if (employeesMin !== "") {
+      visible = visible.filter((result) => Number(result.employees || 0) >= Number(employeesMin));
+    }
+    if (employeesMax !== "") {
+      visible = visible.filter((result) => Number(result.employees || 0) <= Number(employeesMax));
+    }
+    if (sort === "default") {
+      applyAdvancedSort(visible);
+    } else if (sort === "scoreAsc") {
+      visible.sort((a, b) => a.total_score - b.total_score);
+    } else if (sort === "scoreDesc") {
+      visible.sort((a, b) => b.total_score - a.total_score);
+    } else if (sort === "companyAsc") {
+      visible.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)));
+    }
   }
   return visible;
 }
 
 function updateResults(newResults) {
   results = newResults;
+  refreshResultFilterOptions();
   const tbody = document.getElementById("resultsBody");
   tbody.innerHTML = "";
 
@@ -822,6 +1061,7 @@ function updateResults(newResults) {
     else cool += 1;
 
     const hasPdf = pdfPaths[result.domain];
+    const statusCellStyle = featureEnabled("follow_up_status") ? "" : ' style="display:none"';
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${index + 1}</td>
@@ -830,7 +1070,8 @@ function updateResults(newResults) {
       <td>${esc(result.domain)}</td>
       <td>${result.total_score.toFixed(1)} / ${result.max_score}</td>
       <td>${result.findings_count}</td>
-      <td>${esc(result.follow_up_status || "new")}</td>
+      <td${statusCellStyle}>${esc(result.follow_up_status || "new")}</td>
+      <td>${Number(result.employees || 0).toLocaleString()}</td>
       <td>
         ${hasPdf ? `<button class="btn btn-ghost compact-btn" onclick="downloadPdf('${encodeURIComponent(result.domain)}')">PDF</button>` : ""}
         <button class="btn btn-detail" onclick="showDetail('${encodeURIComponent(result.domain)}')">Details</button>
@@ -857,9 +1098,20 @@ async function showDetail(encodedDomain) {
   const result = results.find((item) => item.domain === domain);
   if (!result) return;
 
-  const noteData = await apiJson(`/api/lead-notes/${encodeURIComponent(domain)}`);
-  result.lead_notes = noteData.notes || "";
-  result.follow_up_status = noteData.follow_up_status || "new";
+  if (leadWorkspaceEnabled()) {
+    const noteData = await apiJson(`/api/lead-notes/${encodeURIComponent(domain)}`);
+    result.lead_notes = noteData.notes || "";
+    result.follow_up_status = noteData.follow_up_status || "new";
+  }
+
+  let comparison = null;
+  if (featureEnabled("scan_comparison")) {
+    try {
+      comparison = await apiJson(`/api/compare/domain/${encodeURIComponent(domain)}`);
+    } catch {
+      comparison = null;
+    }
+  }
 
   document.getElementById("detailTitle").textContent =
     `${result.company_name} - ${result.tier}`;
@@ -911,21 +1163,59 @@ async function showDetail(encodedDomain) {
   }
 
   if ((accountSummary?.features?.conversation_starter || false) && result.sales_angles && result.sales_angles.length) {
-    html += `<div class="detail-section"><h4>Conversation Starters</h4>`;
+    html += `<div class="detail-section"><h4>${featureEnabled("advanced_sales_advice") ? "Recommended Sales Approach" : "Conversation Starters"}</h4>`;
     result.sales_angles.forEach((angle) => {
       html += `<div class="sales-item">${esc(angle)}</div>`;
     });
     html += `</div>`;
   }
 
-  if (accountSummary?.features?.lead_notes || accountSummary?.features?.follow_up_status) {
+  if (comparison) {
+    const delta = comparison.delta || {};
+    const dimensions = comparison.dimension_deltas || [];
+    const added = comparison.added_key_gaps || [];
+    const resolved = comparison.resolved_key_gaps || [];
+    html += `<div class="detail-section"><h4>Scan Comparison</h4>
+      <div class="detail-grid">
+        <div><div class="detail-item-label">Current Score</div><div class="detail-item-value">${comparison.current.total_score} / ${comparison.current.max_score}</div></div>
+        <div><div class="detail-item-label">Previous Score</div><div class="detail-item-value">${comparison.previous.total_score} / ${comparison.previous.max_score}</div></div>
+        <div><div class="detail-item-label">Score Delta</div><div class="detail-item-value">${Number(delta.score || 0).toFixed(1)}</div></div>
+        <div><div class="detail-item-label">Findings Delta</div><div class="detail-item-value">${delta.findings_count || 0}</div></div>
+      </div>`;
+    if (dimensions.length) {
+      html += `<div class="detail-section"><h4>Dimension Changes</h4>`;
+      dimensions.forEach((item) => {
+        html += `<div class="score-row"><span>${esc(item.label)} (${item.previous_score}/${item.previous_max_score} -> ${item.current_score}/${item.current_max_score})</span><span class="score-val">${Number(item.delta).toFixed(1)}</span></div>`;
+      });
+      html += `</div>`;
+    }
+    if (added.length) {
+      html += `<div class="detail-section"><h4>New Gaps Since Previous Scan</h4>`;
+      added.forEach((gap) => {
+        html += `<div class="gap-item gap-key">${esc(gap)}</div>`;
+      });
+      html += `</div>`;
+    }
+    if (resolved.length) {
+      html += `<div class="detail-section"><h4>Resolved Gaps Since Previous Scan</h4>`;
+      resolved.forEach((gap) => {
+        html += `<div class="sales-item">${esc(gap)}</div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (leadWorkspaceEnabled()) {
+    const allowedStatuses = accountSummary?.allowed_follow_up_statuses || ["new"];
+    const selectedStatus = allowedStatuses.includes(result.follow_up_status) ? result.follow_up_status : allowedStatuses[0];
     html += `
       <div class="detail-section">
         <h4>Lead Workspace</h4>
         <label class="form-label">Follow-up status
           <select id="leadStatus" class="form-input">
-            ${["new", "contacting", "qualified", "proposal", "won", "lost"]
-              .map((status) => `<option value="${status}" ${status === result.follow_up_status ? "selected" : ""}>${status}</option>`)
+            ${allowedStatuses
+              .map((status) => `<option value="${status}" ${status === selectedStatus ? "selected" : ""}>${status}</option>`)
               .join("")}
           </select>
         </label>
@@ -979,50 +1269,27 @@ function downloadPdf(encodedDomain) {
 }
 
 function exportJSON() {
+  if (!featureEnabled("export_options")) {
+    alert("JSON export is not available for this plan.");
+    return;
+  }
   if (!results.length) {
     alert("No results to export.");
     return;
   }
-  const blob = new Blob(
-    [JSON.stringify({ generated_at: new Date().toISOString(), leads: results }, null, 2)],
-    { type: "application/json" },
-  );
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `lead_scout_export_${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  window.open("/api/export/json", "_blank");
 }
 
 function exportCSV() {
+  if (!featureEnabled("csv_export")) {
+    alert("CSV export is not available for this plan.");
+    return;
+  }
   if (!results.length) {
     alert("No results to export.");
     return;
   }
-  const rows = [
-    ["company_name", "domain", "tier", "score", "max_score", "findings_count", "sector", "follow_up_status"],
-    ...results.map((result) => [
-      result.company_name,
-      result.domain,
-      result.tier,
-      result.total_score,
-      result.max_score,
-      result.findings_count,
-      result.sector,
-      result.follow_up_status || "new",
-    ]),
-  ];
-  const csv = rows
-    .map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `lead_scout_export_${Date.now()}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  window.open("/api/export/csv", "_blank");
 }
 
 function toggleSection(sectionId) {
@@ -1043,7 +1310,16 @@ document.addEventListener("keydown", (event) => {
 
 document.getElementById("companySearch")?.addEventListener("input", refreshCompanyTable);
 document.getElementById("resultSearch")?.addEventListener("input", () => updateResults(results));
+document.getElementById("resultTierFilter")?.addEventListener("change", () => updateResults(results));
+document.getElementById("resultSectorFilter")?.addEventListener("change", () => updateResults(results));
+document.getElementById("resultStatusFilter")?.addEventListener("change", () => updateResults(results));
+["resultScoreMin", "resultScoreMax", "resultFindingsMin", "resultFindingsMax", "resultEmployeesMin", "resultEmployeesMax"].forEach((id) => {
+  document.getElementById(id)?.addEventListener("input", () => updateResults(results));
+});
 document.getElementById("resultSort")?.addEventListener("change", () => updateResults(results));
+document.querySelectorAll("[data-sort-key]").forEach((header) => {
+  header.addEventListener("click", () => setTableSort(header.dataset.sortKey));
+});
 
 loadAccountSummary()
   .then(async () => {

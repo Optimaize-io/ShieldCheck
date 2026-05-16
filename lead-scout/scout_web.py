@@ -22,6 +22,7 @@ from flask import (
     Flask,
     Response,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -61,6 +62,7 @@ from persistence import (
     list_account_users,
     list_current_companies,
     list_domain_lists_page,
+    list_recent_scan_runs,
     list_scan_runs_page,
     list_token_ledger,
     record_scan_run,
@@ -158,6 +160,225 @@ def platform_admin_required(f):
         return f(*args, **kwargs)
 
     return decorated
+
+
+def _account_features(account_id: int) -> Dict[str, Any]:
+    return dict(get_account_summary(int(account_id)).get("features") or {})
+
+
+def _feature_value(features: Dict[str, Any], key: str) -> Any:
+    return features.get(key)
+
+
+def _feature_enabled(features: Dict[str, Any], key: str) -> bool:
+    value = _feature_value(features, key)
+    return value not in (None, False, "", "no", "false")
+
+
+def _can_access_lead_workspace(features: Dict[str, Any]) -> bool:
+    return _feature_enabled(features, "lead_notes") or _feature_enabled(
+        features, "follow_up_status"
+    )
+
+
+def _filter_mode_for_features(features: Dict[str, Any]) -> str:
+    if _feature_enabled(features, "advanced_filters"):
+        return "advanced"
+    value = _feature_value(features, "filter_sorting")
+    if value is True:
+        return "basic"
+    if value == "limited":
+        return "search_only"
+    return "none"
+
+
+def _allow_report_table_sort(features: Dict[str, Any]) -> bool:
+    return _feature_enabled(features, "advanced_filters")
+
+
+def _allowed_follow_up_statuses(features: Dict[str, Any]) -> List[str]:
+    value = _feature_value(features, "follow_up_status")
+    if value is True:
+        return list(FOLLOW_UP_STATUSES)
+    if value == "limited":
+        return ["new", "contacting", "qualified"]
+    return []
+
+
+def _normalize_follow_up_status_for_features(features: Dict[str, Any], status: Any) -> str:
+    allowed = _allowed_follow_up_statuses(features)
+    normalized = str(status or "").strip()
+    if normalized in allowed:
+        return normalized
+    return allowed[0] if allowed else "new"
+
+
+def _sanitize_result_for_features(
+    result_dict: Dict[str, Any], features: Dict[str, Any]
+) -> Dict[str, Any]:
+    sanitized = dict(result_dict)
+    if not _feature_enabled(features, "conversation_starter"):
+        sanitized["sales_angles"] = []
+    if not _feature_enabled(features, "lead_notes"):
+        sanitized.pop("lead_notes", None)
+    if not _feature_enabled(features, "follow_up_status"):
+        sanitized.pop("follow_up_status", None)
+    return sanitized
+
+
+def _sanitize_lead_for_features(lead: LeadScore, features: Dict[str, Any]) -> LeadScore:
+    if not _feature_enabled(features, "conversation_starter"):
+        lead.sales_angles = []
+    elif _feature_enabled(features, "advanced_sales_advice"):
+        lead.sales_angles = _build_advanced_sales_angles(lead)
+    return lead
+
+
+def _dimension_label(key: str) -> str:
+    return key.replace("_", " ").title()
+
+
+def _build_advanced_sales_angles(lead: LeadScore) -> List[str]:
+    angles: List[str] = []
+    scores = (lead.to_dict().get("scores") or {})
+    for key, dim in scores.items():
+        if not isinstance(dim, dict) or dim.get("analyzed") is False:
+            continue
+        missing = [item for item in (dim.get("missing") or []) if item]
+        risks = [item for item in (dim.get("risks") or []) if item]
+        if not missing:
+            continue
+        label = _dimension_label(key)
+        score = dim.get("score")
+        max_score = dim.get("max_score")
+        score_text = (
+            f"{score}/{max_score}"
+            if isinstance(score, (int, float)) and isinstance(max_score, (int, float))
+            else "N/A"
+        )
+        gap_text = missing[0]
+        risk_text = risks[0] if risks else "This increases external security and compliance risk."
+        business_impact = (
+            "This is externally visible and creates a concrete discussion around exposure reduction, control maturity, and audit readiness."
+        )
+        next_step = (
+            f"Next step: review the {label.lower()} gap, validate the affected controls, and define a remediation sequence with ownership and follow-up verification."
+        )
+        angles.append(
+            f"{label} ({score_text}): Gap: {gap_text}. Risk: {risk_text} Business impact: {business_impact} {next_step}"
+        )
+        if len(angles) >= 5:
+            break
+    if not angles:
+        return list(lead.sales_angles or [])
+    return angles
+
+
+def _output_path_to_fs_path(output_path: Optional[str]) -> Optional[Path]:
+    if not output_path:
+        return None
+    filename = Path(str(output_path)).name
+    return Path(__file__).parent / "output" / filename
+
+
+def _load_report_json_payload(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
+    path = _output_path_to_fs_path(output_path)
+    if path is None or not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def _find_lead_in_report_payload(payload: Optional[Dict[str, Any]], domain: str) -> Optional[Dict[str, Any]]:
+    if not payload:
+        return None
+    normalized = domain.strip().lower()
+    for lead in payload.get("leads") or []:
+        if str(lead.get("domain") or "").strip().lower() == normalized:
+            return dict(lead)
+    return None
+
+
+def _account_owns_pdf_output(account_id: int, filename: str) -> bool:
+    expected_name = Path(str(filename)).name
+    for run in list_recent_scan_runs(int(account_id), limit=200):
+        payload = _load_report_json_payload(run.get("report_json_path"))
+        if not payload:
+            continue
+        for lead in payload.get("leads") or []:
+            domain = str(lead.get("domain") or "").strip()
+            if not domain:
+                continue
+            pdf_name = f"security_report_{domain.replace('.', '_')}.pdf"
+            if pdf_name == expected_name:
+                return True
+    return False
+
+
+def _comparison_status(delta: float) -> str:
+    if delta < 0:
+        return "worsened"
+    if delta > 0:
+        return "improved"
+    return "unchanged"
+
+
+def _compare_lead_versions(current: Dict[str, Any], previous: Dict[str, Any]) -> Dict[str, Any]:
+    current_scores = current.get("scores") or {}
+    previous_scores = previous.get("scores") or {}
+    dimension_deltas: List[Dict[str, Any]] = []
+    for key in sorted(set(current_scores.keys()) | set(previous_scores.keys())):
+        current_dim = current_scores.get(key) or {}
+        previous_dim = previous_scores.get(key) or {}
+        current_score = current_dim.get("score")
+        previous_score = previous_dim.get("score")
+        if not isinstance(current_score, (int, float)) or not isinstance(previous_score, (int, float)):
+            continue
+        delta = float(current_score) - float(previous_score)
+        dimension_deltas.append(
+            {
+                "key": key,
+                "label": _dimension_label(key),
+                "current_score": current_score,
+                "current_max_score": current_dim.get("max_score"),
+                "previous_score": previous_score,
+                "previous_max_score": previous_dim.get("max_score"),
+                "delta": delta,
+                "status": _comparison_status(delta),
+            }
+        )
+    current_gaps = set(current.get("key_gaps") or [])
+    previous_gaps = set(previous.get("key_gaps") or [])
+    score_delta = float(current.get("total_score") or 0) - float(previous.get("total_score") or 0)
+    findings_delta = int(current.get("findings_count") or 0) - int(previous.get("findings_count") or 0)
+    return {
+        "domain": current.get("domain") or previous.get("domain"),
+        "current": {
+            "company_name": current.get("company_name"),
+            "total_score": current.get("total_score"),
+            "max_score": current.get("max_score"),
+            "tier": current.get("tier"),
+            "findings_count": current.get("findings_count"),
+        },
+        "previous": {
+            "company_name": previous.get("company_name"),
+            "total_score": previous.get("total_score"),
+            "max_score": previous.get("max_score"),
+            "tier": previous.get("tier"),
+            "findings_count": previous.get("findings_count"),
+        },
+        "delta": {
+            "score": score_delta,
+            "findings_count": findings_delta,
+            "status": _comparison_status(score_delta),
+        },
+        "dimension_deltas": dimension_deltas,
+        "added_key_gaps": sorted(current_gaps - previous_gaps),
+        "resolved_key_gaps": sorted(previous_gaps - current_gaps),
+    }
 
 
 class ScanState:
@@ -263,6 +484,7 @@ def _scan_worker(
     domain_list_id: int,
 ):
     state = get_account_state(account_id)
+    features = _account_features(account_id)
     _scan_context.account_id = account_id
     state.running = True
     state.total = len(companies)
@@ -281,11 +503,19 @@ def _scan_worker(
 
             try:
                 result = scout.scan_company(company)
+                result = _sanitize_lead_for_features(result, features)
                 lead_scores.append(result)
                 result_dict = result.to_dict()
-                note_data = get_lead_note(account_id, company.domain)
-                result_dict["lead_notes"] = note_data.get("notes", "")
-                result_dict["follow_up_status"] = note_data.get("follow_up_status", "new")
+                if _can_access_lead_workspace(features):
+                    note_data = get_lead_note(account_id, company.domain)
+                    if _feature_enabled(features, "lead_notes"):
+                        result_dict["lead_notes"] = note_data.get("notes", "")
+                    if _feature_enabled(features, "follow_up_status"):
+                        result_dict["follow_up_status"] = _normalize_follow_up_status_for_features(
+                            features,
+                            note_data.get("follow_up_status", "new"),
+                        )
+                result_dict = _sanitize_result_for_features(result_dict, features)
                 with state.lock:
                     state.results.append(result_dict)
             except Exception as exc:
@@ -306,18 +536,31 @@ def _scan_worker(
             html_path = str(output_dir / f"report_web_{ts}.html")
 
             scout.generate_report(
-                lead_scores, md_path, json_output=json_path, html_output=html_path
+                lead_scores,
+                md_path,
+                json_output=json_path,
+                html_output=html_path,
+                include_sales_angles=_feature_enabled(features, "conversation_starter"),
+                include_json_export=_feature_enabled(features, "export_options"),
+                html_filter_mode=_filter_mode_for_features(features),
+                html_allow_table_sort=_allow_report_table_sort(features),
             )
 
             state.report_html_path = f"/output/{Path(html_path).name}"
             state.report_json_path = f"/output/{Path(json_path).name}"
 
             try:
+                hot_leads_count = sum(1 for lead in lead_scores if "HOT" in str(lead.tier))
+                warm_leads_count = sum(1 for lead in lead_scores if "WARM" in str(lead.tier))
+                cool_leads_count = sum(1 for lead in lead_scores if "COOL" in str(lead.tier))
                 record_scan_run(
                     owner_account_id=account_id,
                     created_by_user_id=user_id,
                     domain_list_id=domain_list_id,
                     domain_count=len(companies),
+                    hot_leads_count=hot_leads_count,
+                    warm_leads_count=warm_leads_count,
+                    cool_leads_count=cool_leads_count,
                     report_html_path=state.report_html_path,
                     report_json_path=state.report_json_path,
                 )
@@ -423,15 +666,8 @@ def account_summary():
         "username": user["username"],
         "role": user["role"],
     }
-    if user["role"] != "admin":
-        return jsonify(
-            {
-                "mode": "account",
-                "account_name": user.get("account_name") or "",
-                "viewer": viewer,
-            }
-        )
     summary = get_account_summary(int(user["account_id"]))
+    summary["allowed_follow_up_statuses"] = _allowed_follow_up_statuses(summary.get("features") or {})
     summary["viewer"] = viewer
     summary["mode"] = "account"
     return jsonify(summary)
@@ -482,7 +718,16 @@ def token_ledger():
 def lead_note(domain: str):
     user = _session_user()
     assert user is not None
-    return jsonify(get_lead_note(int(user["account_id"]), domain))
+    features = _account_features(int(user["account_id"]))
+    if not _can_access_lead_workspace(features):
+        return jsonify({"error": "Lead workspace is not available for this plan"}), 403
+    note = get_lead_note(int(user["account_id"]), domain)
+    note["allowed_statuses"] = _allowed_follow_up_statuses(features)
+    note["follow_up_status"] = _normalize_follow_up_status_for_features(
+        features,
+        note.get("follow_up_status", "new"),
+    )
+    return jsonify(note)
 
 
 @app.route("/api/lead-notes/<path:domain>", methods=["POST"])
@@ -490,9 +735,23 @@ def lead_note(domain: str):
 def save_lead_note(domain: str):
     user = _session_user()
     assert user is not None
+    features = _account_features(int(user["account_id"]))
+    if not _can_access_lead_workspace(features):
+        return jsonify({"error": "Lead workspace is not available for this plan"}), 403
+    allowed_statuses = _allowed_follow_up_statuses(features)
     data = request.get_json() or {}
     notes = (data.get("notes") or "").strip()
     follow_up_status = (data.get("follow_up_status") or "new").strip()
+    if follow_up_status not in allowed_statuses:
+        return (
+            jsonify(
+                {
+                    "error": "Follow-up status is not available for this plan",
+                    "allowed_statuses": allowed_statuses,
+                }
+            ),
+            400,
+        )
     try:
         upsert_lead_note(
             account_id=int(user["account_id"]),
@@ -503,7 +762,55 @@ def save_lead_note(domain: str):
         )
         return jsonify({"ok": True})
     except ValueError as exc:
-        return jsonify({"error": str(exc), "allowed_statuses": FOLLOW_UP_STATUSES}), 400
+        return jsonify({"error": str(exc), "allowed_statuses": allowed_statuses}), 400
+
+
+@app.route("/api/compare/domain/<path:domain>")
+@account_required
+def compare_domain(domain: str):
+    user = _session_user()
+    assert user is not None
+    features = _account_features(int(user["account_id"]))
+    if not _feature_enabled(features, "scan_comparison"):
+        return jsonify({"error": "Scan comparison is not available for this plan"}), 403
+
+    normalized_domain = domain.strip().lower()
+    state = get_account_state(int(user["account_id"]))
+    current_live = None
+    with state.lock:
+        for result in reversed(state.results):
+            if str(result.get("domain") or "").strip().lower() == normalized_domain:
+                current_live = dict(result)
+                break
+
+    recent_runs = list_recent_scan_runs(int(user["account_id"]), limit=100)
+    current_source: Optional[Dict[str, Any]] = None
+    previous_source: Optional[Dict[str, Any]] = None
+
+    if current_live is not None:
+        current_source = current_live
+    skip_first_historical_match = current_live is not None
+
+    for run in recent_runs:
+        lead = _find_lead_in_report_payload(
+            _load_report_json_payload(run.get("report_json_path")),
+            normalized_domain,
+        )
+        if lead is None:
+            continue
+        if skip_first_historical_match:
+            skip_first_historical_match = False
+            continue
+        if current_source is None:
+            current_source = lead
+            continue
+        previous_source = lead
+        break
+
+    if current_source is None or previous_source is None:
+        return jsonify({"error": "Not enough scan history found for this domain"}), 404
+
+    return jsonify(_compare_lead_versions(current_source, previous_source))
 
 
 @app.route("/api/companies", methods=["GET"])
@@ -741,6 +1048,7 @@ def scan_status():
 def history_scans():
     user = _session_user()
     assert user is not None
+    features = _account_features(int(user["account_id"]))
     try:
         page = int(request.args.get("page", 1))
     except Exception:
@@ -752,6 +1060,12 @@ def history_scans():
     total, items = list_scan_runs_page(
         owner_account_id=int(user["account_id"]), page=page, page_size=page_size
     )
+    if not _feature_enabled(features, "expanded_scan_history"):
+        for item in items:
+            item.pop("hot_leads_count", None)
+            item.pop("warm_leads_count", None)
+            item.pop("cool_leads_count", None)
+            item.pop("report_json_path", None)
     return jsonify({"page": page, "page_size": page_size, "total": total, "items": items})
 
 
@@ -860,10 +1174,98 @@ def serve_output(filename: str):
     user = _session_user()
     assert user is not None
     output_path = f"/output/{filename}"
-    if not account_owns_output_path(int(user["account_id"]), output_path):
+    is_pdf = filename.lower().startswith("pdfs/") and filename.lower().endswith(".pdf")
+    if is_pdf:
+        if not _account_owns_pdf_output(int(user["account_id"]), filename):
+            return jsonify({"error": "Not found"}), 404
+    elif not account_owns_output_path(int(user["account_id"]), output_path):
         return jsonify({"error": "Not found"}), 404
+    features = _account_features(int(user["account_id"]))
+    if filename.lower().endswith(".json") and not _feature_enabled(features, "export_options"):
+        return jsonify({"error": "JSON export is not available for this plan"}), 403
     output_dir = Path(__file__).parent / "output"
-    return send_from_directory(str(output_dir), filename)
+    response = make_response(send_from_directory(str(output_dir), filename, as_attachment=is_pdf))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@app.route("/api/export/csv")
+@account_required
+def export_csv():
+    user = _session_user()
+    assert user is not None
+    features = _account_features(int(user["account_id"]))
+    if not _feature_enabled(features, "csv_export"):
+        return jsonify({"error": "CSV export is not available for this plan"}), 403
+
+    state = get_account_state(int(user["account_id"]))
+    results = state.snapshot().get("results") or []
+    if not results:
+        return jsonify({"error": "No results to export"}), 400
+
+    include_follow_up_status = _feature_enabled(features, "follow_up_status")
+    header = [
+        "company_name",
+        "domain",
+        "tier",
+        "score",
+        "max_score",
+        "findings_count",
+        "sector",
+    ]
+    if include_follow_up_status:
+        header.append("follow_up_status")
+    rows = [header]
+    for result in results:
+        row = [
+            result.get("company_name", ""),
+            result.get("domain", ""),
+            result.get("tier", ""),
+            result.get("total_score", ""),
+            result.get("max_score", ""),
+            result.get("findings_count", ""),
+            result.get("sector", ""),
+        ]
+        if include_follow_up_status:
+            row.append(result.get("follow_up_status", ""))
+        rows.append(row)
+
+    def _csv_escape(value: Any) -> str:
+        return '"' + str(value or "").replace('"', '""') + '"'
+
+    csv_content = "\n".join(",".join(_csv_escape(value) for value in row) for row in rows)
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="lead_scout_export_{int(time.time())}.csv"'},
+    )
+
+
+@app.route("/api/export/json")
+@account_required
+def export_json():
+    user = _session_user()
+    assert user is not None
+    features = _account_features(int(user["account_id"]))
+    if not _feature_enabled(features, "export_options"):
+        return jsonify({"error": "JSON export is not available for this plan"}), 403
+
+    state = get_account_state(int(user["account_id"]))
+    results = state.snapshot().get("results") or []
+    if not results:
+        return jsonify({"error": "No results to export"}), 400
+
+    payload = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "leads": results,
+    }
+    return Response(
+        json.dumps(payload),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="lead_scout_export_{int(time.time())}.json"'},
+    )
 
 
 @app.route("/api/platform/accounts")

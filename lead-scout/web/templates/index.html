@@ -116,6 +116,24 @@
                         <h2>Scan Results</h2>
                         <div class="toolbar-inline">
                             <input type="search" id="resultSearch" name="result_search" class="form-input compact-input" placeholder="Search results" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                            <select id="resultTierFilter" class="form-input compact-input">
+                                <option value="">All Tiers</option>
+                                <option value="HOT">Hot</option>
+                                <option value="WARM">Warm</option>
+                                <option value="COOL">Cool</option>
+                            </select>
+                            <select id="resultSectorFilter" class="form-input compact-input">
+                                <option value="">All Sectors</option>
+                            </select>
+                            <select id="resultStatusFilter" class="form-input compact-input">
+                                <option value="">All Statuses</option>
+                            </select>
+                            <input type="number" id="resultScoreMin" class="form-input compact-input" placeholder="Min score" min="0" step="0.1">
+                            <input type="number" id="resultScoreMax" class="form-input compact-input" placeholder="Max score" min="0" step="0.1">
+                            <input type="number" id="resultFindingsMin" class="form-input compact-input" placeholder="Min findings" min="0" step="1">
+                            <input type="number" id="resultFindingsMax" class="form-input compact-input" placeholder="Max findings" min="0" step="1">
+                            <input type="number" id="resultEmployeesMin" class="form-input compact-input" placeholder="Min employees" min="0" step="1">
+                            <input type="number" id="resultEmployeesMax" class="form-input compact-input" placeholder="Max employees" min="0" step="1">
                             <select id="resultSort" class="form-input compact-input">
                                 <option value="default">Current order</option>
                                 <option value="scoreAsc">Score low to high</option>
@@ -123,22 +141,21 @@
                                 <option value="companyAsc">Company A-Z</option>
                             </select>
                             <button class="btn btn-secondary" id="btnOpenReport" onclick="openReport()" style="display:none">Open HTML Report</button>
-                            <button class="btn btn-secondary" onclick="exportJSON()">Export JSON</button>
-                            <button class="btn btn-secondary" onclick="exportCSV()">Export CSV</button>
                         </div>
                     </div>
                     <div class="table-wrap" style="margin-top:1rem">
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th style="width:50px">#</th>
-                                    <th>Tier</th>
-                                    <th>Company</th>
-                                    <th>Domain</th>
-                                    <th>Score</th>
-                                    <th>Findings</th>
-                                    <th>Status</th>
-                                    <th style="width:90px"></th>
+                                    <th id="resultHeaderRank" data-sort-key="rank" style="width:50px">#</th>
+                                    <th id="resultHeaderTier" data-sort-key="tier">Tier</th>
+                                    <th id="resultHeaderCompany" data-sort-key="company">Company</th>
+                                    <th id="resultHeaderDomain" data-sort-key="domain">Domain</th>
+                                    <th id="resultHeaderScore" data-sort-key="score">Score</th>
+                                    <th id="resultHeaderFindings" data-sort-key="findings">Findings</th>
+                                    <th id="resultStatusHeader" data-sort-key="status">Status</th>
+                                    <th id="resultHeaderEmployees" data-sort-key="employees">Employees</th>
+                                    <th style="width:120px"></th>
                                 </tr>
                             </thead>
                             <tbody id="resultsBody"></tbody>
@@ -170,6 +187,9 @@
                                     <tr>
                                         <th>Date/Time</th>
                                         <th style="width:140px">Domains</th>
+                                        <th id="scanHistoryHotHeader" style="width:120px">Hot</th>
+                                        <th id="scanHistoryWarmHeader" style="width:120px">Warm</th>
+                                        <th id="scanHistoryCoolHeader" style="width:120px">Cool</th>
                                         <th style="width:120px"></th>
                                     </tr>
                                 </thead>
@@ -361,7 +381,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=starter-fix-20260516"></script>
 </body>
 
 </html>

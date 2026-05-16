@@ -262,12 +262,21 @@ class LeadScout:
         output_path: str,
         json_output: Optional[str] = None,
         html_output: Optional[str] = None,
+        *,
+        include_sales_angles: bool = True,
+        include_json_export: bool = True,
+        html_filter_mode: str = "advanced",
+        html_allow_table_sort: bool = True,
     ) -> str:
         return self.assessment_service.generate_lead_report_set(
             leads,
             output_path,
             json_output=json_output,
             html_output=html_output,
+            include_sales_angles=include_sales_angles,
+            include_json_export=include_json_export,
+            html_filter_mode=html_filter_mode,
+            html_allow_table_sort=html_allow_table_sort,
         )
 
 

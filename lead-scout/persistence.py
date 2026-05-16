@@ -18,6 +18,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "cybersecurity_lead_score": True,
             "clear_explanation_of_findings": True,
             "basic_scan_history": True,
+            "expanded_scan_history": False,
             "basic_pdf_report": True,
             "csv_export": True,
             "filter_sorting": "limited",
@@ -48,6 +49,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "cybersecurity_lead_score": True,
             "clear_explanation_of_findings": True,
             "basic_scan_history": True,
+            "expanded_scan_history": True,
             "basic_pdf_report": True,
             "csv_export": True,
             "filter_sorting": True,
@@ -80,6 +82,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "cybersecurity_lead_score": True,
             "clear_explanation_of_findings": True,
             "basic_scan_history": True,
+            "expanded_scan_history": True,
             "basic_pdf_report": True,
             "csv_export": True,
             "filter_sorting": True,
@@ -113,6 +116,7 @@ PLAN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "cybersecurity_lead_score": True,
             "clear_explanation_of_findings": True,
             "basic_scan_history": True,
+            "expanded_scan_history": True,
             "basic_pdf_report": True,
             "csv_export": True,
             "filter_sorting": True,
@@ -422,6 +426,9 @@ def init_db(db_path: Optional[Path] = None) -> None:
               created_by_user_id INTEGER,
               created_at TEXT NOT NULL,
               domain_count INTEGER NOT NULL,
+              hot_leads_count INTEGER,
+              warm_leads_count INTEGER,
+              cool_leads_count INTEGER,
               domain_list_id INTEGER NOT NULL,
               report_html_path TEXT NOT NULL,
               report_json_path TEXT,
@@ -477,6 +484,12 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 conn.execute("ALTER TABLE scan_runs ADD COLUMN owner_account_id INTEGER")
             if not _column_exists(conn, "scan_runs", "created_by_user_id"):
                 conn.execute("ALTER TABLE scan_runs ADD COLUMN created_by_user_id INTEGER")
+            if not _column_exists(conn, "scan_runs", "hot_leads_count"):
+                conn.execute("ALTER TABLE scan_runs ADD COLUMN hot_leads_count INTEGER")
+            if not _column_exists(conn, "scan_runs", "warm_leads_count"):
+                conn.execute("ALTER TABLE scan_runs ADD COLUMN warm_leads_count INTEGER")
+            if not _column_exists(conn, "scan_runs", "cool_leads_count"):
+                conn.execute("ALTER TABLE scan_runs ADD COLUMN cool_leads_count INTEGER")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_account_username ON users(account_id, username);"
@@ -1676,6 +1689,33 @@ def create_domain_list_snapshot(
         conn.close()
 
 
+def _report_output_to_fs_path(output_path: Optional[str]) -> Optional[Path]:
+    if not output_path:
+        return None
+    normalized = str(output_path).strip()
+    if not normalized:
+        return None
+    filename = Path(normalized).name
+    return Path(__file__).parent / "output" / filename
+
+
+def _scan_run_counts_from_report_json(report_json_path: Optional[str]) -> Dict[str, int]:
+    path = _report_output_to_fs_path(report_json_path)
+    if path is None or not path.exists():
+        return {"hot_leads_count": 0, "warm_leads_count": 0, "cool_leads_count": 0}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        summary = data.get("summary") or {}
+        return {
+            "hot_leads_count": int(summary.get("hot_leads") or 0),
+            "warm_leads_count": int(summary.get("warm_leads") or 0),
+            "cool_leads_count": int(summary.get("cool_leads") or 0),
+        }
+    except Exception:
+        return {"hot_leads_count": 0, "warm_leads_count": 0, "cool_leads_count": 0}
+
+
 def list_domain_lists_page(
     *, owner_account_id: int, page: int, page_size: int, db_path: Optional[Path] = None
 ) -> Tuple[int, List[Dict[str, Any]]]:
@@ -1784,6 +1824,9 @@ def record_scan_run(
     *,
     domain_list_id: int,
     domain_count: int,
+    hot_leads_count: int,
+    warm_leads_count: int,
+    cool_leads_count: int,
     report_html_path: str,
     owner_account_id: int,
     created_by_user_id: int,
@@ -1796,15 +1839,19 @@ def record_scan_run(
             """
             INSERT INTO scan_runs(
               owner_account_id, created_by_user_id, created_at, domain_count,
+              hot_leads_count, warm_leads_count, cool_leads_count,
               domain_list_id, report_html_path, report_json_path
             )
-            VALUES(?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 int(owner_account_id),
                 int(created_by_user_id),
                 _utc_now_iso(),
                 int(domain_count),
+                int(hot_leads_count),
+                int(warm_leads_count),
+                int(cool_leads_count),
                 int(domain_list_id),
                 report_html_path,
                 report_json_path,
@@ -1833,7 +1880,16 @@ def list_scan_runs_page(
         )
         rows = conn.execute(
             """
-            SELECT id, created_at, domain_count, report_html_path, domain_list_id
+            SELECT
+              id,
+              created_at,
+              domain_count,
+              hot_leads_count,
+              warm_leads_count,
+              cool_leads_count,
+              report_html_path,
+              report_json_path,
+              domain_list_id
             FROM scan_runs
             WHERE owner_account_id = ?
             ORDER BY created_at DESC, id DESC
@@ -1841,7 +1897,48 @@ def list_scan_runs_page(
             """,
             (int(owner_account_id), page_size, offset),
         ).fetchall()
-        return total, [dict(r) for r in rows]
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            if any(item.get(key) is None for key in ("hot_leads_count", "warm_leads_count", "cool_leads_count")):
+                item.update(_scan_run_counts_from_report_json(item.get("report_json_path")))
+            items.append(item)
+        return total, items
+    finally:
+        conn.close()
+
+
+def list_recent_scan_runs(
+    owner_account_id: int, limit: int = 50, db_path: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    conn = connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+              id,
+              created_at,
+              domain_count,
+              hot_leads_count,
+              warm_leads_count,
+              cool_leads_count,
+              report_html_path,
+              report_json_path,
+              domain_list_id
+            FROM scan_runs
+            WHERE owner_account_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(owner_account_id), max(1, min(500, int(limit)))),
+        ).fetchall()
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            if any(item.get(key) is None for key in ("hot_leads_count", "warm_leads_count", "cool_leads_count")):
+                item.update(_scan_run_counts_from_report_json(item.get("report_json_path")))
+            items.append(item)
+        return items
     finally:
         conn.close()
 

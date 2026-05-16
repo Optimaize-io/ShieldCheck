@@ -213,21 +213,44 @@ class AssessmentService:
         output_path: str,
         json_output: Optional[str] = None,
         html_output: Optional[str] = None,
+        *,
+        include_sales_angles: bool = True,
+        include_json_export: bool = True,
+        html_filter_mode: str = "advanced",
+        html_allow_table_sort: bool = True,
     ) -> str:
         logger.info("Generating report to %s...", output_path)
-        report = self.markdown_report_generator.generate(leads, output_path)
+        report = self.markdown_report_generator.generate(
+            leads,
+            output_path,
+            include_sales_angles=include_sales_angles,
+        )
 
         if json_output:
             self.markdown_report_generator.generate_json(leads, json_output)
             logger.info("JSON data written to %s", json_output)
 
         if html_output:
-            self.html_report_generator.generate(leads, html_output)
+            self.html_report_generator.generate(
+                leads,
+                html_output,
+                include_sales_angles=include_sales_angles,
+                include_json_export=include_json_export,
+                filter_mode=html_filter_mode,
+                allow_table_sort=html_allow_table_sort,
+            )
             logger.info("HTML dashboard written to %s", html_output)
         else:
             html_path = output_path.replace(".md", ".html")
             if html_path != output_path:
-                self.html_report_generator.generate(leads, html_path)
+                self.html_report_generator.generate(
+                    leads,
+                    html_path,
+                    include_sales_angles=include_sales_angles,
+                    include_json_export=include_json_export,
+                    filter_mode=html_filter_mode,
+                    allow_table_sort=html_allow_table_sort,
+                )
                 logger.info("HTML dashboard written to %s", html_path)
 
         logger.info("Report complete: %s", output_path)

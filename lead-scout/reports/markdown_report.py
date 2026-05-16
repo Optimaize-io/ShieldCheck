@@ -20,7 +20,13 @@ class MarkdownReportGenerator:
     def __init__(self):
         self.generated_at = datetime.now()
 
-    def generate(self, leads: List[LeadScore], output_path: Optional[str] = None) -> str:
+    def generate(
+        self,
+        leads: List[LeadScore],
+        output_path: Optional[str] = None,
+        *,
+        include_sales_angles: bool = True,
+    ) -> str:
         sorted_leads = sorted(leads, key=lambda x: x.total_score)
 
         hot_count = sum(1 for l in leads if l.tier == LeadTier.HOT)
@@ -31,7 +37,7 @@ class MarkdownReportGenerator:
             self._header(len(leads)),
             self._executive_summary(leads, hot_count, warm_count, cool_count),
             self._ranking_table(sorted_leads),
-            self._detailed_reports(sorted_leads),
+            self._detailed_reports(sorted_leads, include_sales_angles=include_sales_angles),
             self._methodology(),
             self._scale_up_pitch(len(leads)),
         ]
@@ -124,14 +130,16 @@ class MarkdownReportGenerator:
             )
         return table
 
-    def _detailed_reports(self, leads: List[LeadScore]) -> str:
+    def _detailed_reports(
+        self, leads: List[LeadScore], *, include_sales_angles: bool
+    ) -> str:
         details = "## Detailed Company Reports\n\n> Sorted by priority (highest first)\n\n"
         for lead in leads:
-            details += self._company_report(lead)
+            details += self._company_report(lead, include_sales_angles=include_sales_angles)
             details += "\n---\n\n"
         return details
 
-    def _company_report(self, lead: LeadScore) -> str:
+    def _company_report(self, lead: LeadScore, *, include_sales_angles: bool) -> str:
         report = f"""### {lead.tier.value} {lead.company_name}
 
 **Domain:** `{lead.domain}`  
@@ -188,7 +196,7 @@ class MarkdownReportGenerator:
                 report += f"- Risk: {dim.risks[0]}\n"
             report += "\n"
 
-        if lead.sales_angles:
+        if include_sales_angles and lead.sales_angles:
             report += "#### Recommended Sales Approach\n\n"
             for i, angle in enumerate(lead.sales_angles, 1):
                 report += f"{i}. {angle}\n\n"
