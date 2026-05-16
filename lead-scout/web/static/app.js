@@ -1,8 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════
-   LEAD SCOUT WEB — Client-side application logic
-   ═══════════════════════════════════════════════════════════════ */
-
-// ─── State ───
+let accountSummary = null;
 let companies = [];
 let results = [];
 let eventSource = null;
@@ -12,113 +8,724 @@ let scanHistoryPage = 1;
 let domainListHistoryPage = 1;
 const HISTORY_PAGE_SIZE = 10;
 let confirmAction = null;
+let appMode = "account";
+let selectedPlatformAccountId = null;
+let currentTableSort = { column: "rank", direction: "asc" };
 
-// ─── Clock ───
-function updateClock() {
-  const el = document.getElementById("clockDisplay");
-  if (el) el.textContent = new Date().toLocaleString();
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-// ─── Modals ───
 function openModal(id) {
   document.getElementById(id).classList.add("active");
 }
+
 function closeModal(id) {
   document.getElementById(id).classList.remove("active");
 }
+
 function openAddModal() {
   openModal("addModal");
   document.getElementById("addName").focus();
 }
+
 function openUploadModal() {
   openModal("uploadModal");
 }
 
 function openConfirmModal({ title, message, okText, onOk }) {
   document.getElementById("confirmTitle").textContent = title || "Confirm";
-  const body = document.getElementById("confirmBody");
-  body.textContent = message || "";
+  document.getElementById("confirmBody").textContent = message || "";
 
   const okBtn = document.getElementById("confirmOkBtn");
-  okBtn.disabled = false;
   okBtn.textContent = okText || "Confirm";
+  okBtn.disabled = false;
 
   confirmAction = async () => {
     okBtn.disabled = true;
-    okBtn.textContent = "Working...";
     try {
       await onOk?.();
       closeModal("confirmModal");
     } finally {
       okBtn.disabled = false;
-      okBtn.textContent = okText || "Confirm";
       confirmAction = null;
     }
   };
-
   okBtn.onclick = () => confirmAction?.();
   openModal("confirmModal");
 }
 
-// Close modals on overlay click
 document.querySelectorAll(".modal-overlay").forEach((el) => {
   el.addEventListener("click", () => el.classList.remove("active"));
 });
 
-// ─── Company Management ───
+function esc(str) {
+  if (str == null) return "";
+  const d = document.createElement("div");
+  d.appendChild(document.createTextNode(String(str)));
+  return d.innerHTML;
+}
+
+function fmtDateTime(iso) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return String(iso || "");
+  }
+}
+
+function fmtFeatureValue(value) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  if (value == null || value === "") return "-";
+  return String(value).replaceAll("_", " ");
+}
+
+function featureEnabled(key) {
+  const value = accountSummary?.features?.[key];
+  return ![null, false, "", "no", "false"].includes(value);
+}
+
+function filterMode() {
+  if (featureEnabled("advanced_filters")) return "advanced";
+  if (accountSummary?.features?.filter_sorting === true) return "basic";
+  if (accountSummary?.features?.filter_sorting === "limited") return "search_only";
+  return "none";
+}
+
+function leadWorkspaceEnabled() {
+  return featureEnabled("lead_notes") || featureEnabled("follow_up_status");
+}
+
+function updateFeatureControlledUI() {
+  const mode = filterMode();
+  const sortEl = document.getElementById("resultSort");
+  const tierFilterEl = document.getElementById("resultTierFilter");
+  const sectorFilterEl = document.getElementById("resultSectorFilter");
+  const statusFilterEl = document.getElementById("resultStatusFilter");
+  const advancedFilterIds = [
+    "resultStatusFilter",
+    "resultScoreMin",
+    "resultScoreMax",
+    "resultFindingsMin",
+    "resultFindingsMax",
+    "resultEmployeesMin",
+    "resultEmployeesMax",
+  ];
+  if (sortEl) {
+    sortEl.style.display = mode === "advanced" ? "" : "none";
+    if (mode !== "advanced") {
+      sortEl.value = "default";
+    }
+  }
+  if (tierFilterEl) {
+    tierFilterEl.style.display = mode === "basic" || mode === "advanced" ? "" : "none";
+    if (mode !== "basic" && mode !== "advanced") {
+      tierFilterEl.value = "";
+    }
+  }
+  if (sectorFilterEl) {
+    sectorFilterEl.style.display = mode === "basic" || mode === "advanced" ? "" : "none";
+    if (mode !== "basic" && mode !== "advanced") {
+      sectorFilterEl.value = "";
+    }
+  }
+  if (statusFilterEl) {
+    statusFilterEl.style.display = mode === "advanced" && featureEnabled("follow_up_status") ? "" : "none";
+    if (mode !== "advanced" || !featureEnabled("follow_up_status")) {
+      statusFilterEl.value = "";
+    }
+  }
+  advancedFilterIds.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const shouldShow = mode === "advanced" && (id !== "resultStatusFilter" || featureEnabled("follow_up_status"));
+    el.style.display = shouldShow ? "" : "none";
+    if (!shouldShow && "value" in el) {
+      el.value = "";
+    }
+  });
+
+  const statusHeader = document.getElementById("resultStatusHeader");
+  if (statusHeader) statusHeader.style.display = featureEnabled("follow_up_status") ? "" : "none";
+  const sortableHeaders = document.querySelectorAll("[data-sort-key]");
+  sortableHeaders.forEach((header) => {
+    header.style.cursor = mode === "advanced" ? "pointer" : "";
+    header.title = mode === "advanced" ? "Sort" : "";
+  });
+
+  const expandedHistory = featureEnabled("expanded_scan_history");
+  ["scanHistoryHotHeader", "scanHistoryWarmHeader", "scanHistoryCoolHeader"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = expandedHistory ? "" : "none";
+  });
+}
+
+function tierClassFor(tier) {
+  const t = String(tier || "").toUpperCase();
+  if (t.includes("HOT")) return "hot";
+  if (t.includes("WARM")) return "warm";
+  return "cool";
+}
+
+function toLocalDateTimeInput(isoValue) {
+  if (!isoValue) return "";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+async function apiJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || "Request failed");
+  }
+  return data;
+}
+
+function setSectionVisibility(id, visible) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = visible ? "" : "none";
+}
+
+function hideAccountWorkspace() {
+  ["scanningSection", "historySection", "overviewSection", "adminSection"].forEach((id) =>
+    setSectionVisibility(id, false),
+  );
+}
+
+function showAccountWorkspace() {
+  ["scanningSection", "historySection"].forEach((id) =>
+    setSectionVisibility(id, true),
+  );
+}
+
+async function loadAccountSummary() {
+  accountSummary = await apiJson("/api/account/summary");
+  appMode = accountSummary.mode || "account";
+
+  if (appMode === "platform_admin") {
+    setSectionVisibility("platformSection", true);
+    hideAccountWorkspace();
+    await loadPlatformAccounts();
+    return;
+  }
+
+  setSectionVisibility("platformSection", false);
+  showAccountWorkspace();
+
+  const isAdmin = accountSummary.viewer.role === "admin";
+  setSectionVisibility("overviewSection", isAdmin);
+  setSectionVisibility("adminSection", isAdmin);
+  updateFeatureControlledUI();
+
+  if (isAdmin) {
+    document.getElementById("accountMeta").textContent =
+      `${accountSummary.account_name} - ${accountSummary.viewer.username} (${accountSummary.viewer.role})`;
+    document.getElementById("planName").textContent = accountSummary.plan_name;
+    document.getElementById("billingCycle").textContent =
+      `${accountSummary.billing_cycle} billing`;
+    document.getElementById("userUsage").textContent =
+      `${accountSummary.user_count} / ${accountSummary.max_users}`;
+    document.getElementById("monthlyAllocation").textContent =
+      `${accountSummary.monthly_tokens} tokens`;
+    document.getElementById("refreshAt").textContent =
+      `Refreshes ${fmtDateTime(accountSummary.next_token_refresh_at)}`;
+    document.getElementById("subscriptionStatus").textContent =
+      accountSummary.subscription_status;
+
+    document.getElementById("balanceTotal").textContent =
+      accountSummary.token_balances.total;
+    document.getElementById("balanceMonthly").textContent =
+      accountSummary.token_balances.monthly;
+    document.getElementById("balancePurchased").textContent =
+      accountSummary.token_balances.purchased;
+    document.getElementById("balanceGranted").textContent =
+      accountSummary.token_balances.granted;
+
+    renderFeatures(accountSummary.features || {});
+    await loadTokenLedger();
+    await loadUsers();
+  }
+}
+
+async function loadPlatformAccounts() {
+  const items = await apiJson("/api/platform/accounts");
+  const tbody = document.getElementById("platformAccountsBody");
+  tbody.innerHTML = "";
+  items.forEach((item) => {
+    const tr = document.createElement("tr");
+    tr.className = "clickable-row";
+    tr.dataset.accountId = String(item.account_id);
+    tr.onclick = () => selectPlatformAccount(item.account_id);
+    tr.innerHTML = `
+      <td>${esc(item.account_name)}</td>
+      <td>${esc(item.plan_name)}</td>
+      <td>${esc(item.billing_cycle)}</td>
+      <td>${item.user_count} / ${item.max_users}</td>
+      <td>${item.token_balances.total}</td>
+      <td>${fmtDateTime(item.next_token_refresh_at)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  if (selectedPlatformAccountId) {
+    document.querySelectorAll("#platformAccountsBody tr").forEach((row) => {
+      row.classList.toggle("selected-row", row.dataset.accountId === String(selectedPlatformAccountId));
+    });
+  }
+}
+
+async function selectPlatformAccount(accountId) {
+  selectedPlatformAccountId = accountId;
+  const account = await apiJson(`/api/platform/accounts/${accountId}`);
+  document.querySelectorAll("#platformAccountsBody tr").forEach((row) => {
+    row.classList.toggle("selected-row", row.dataset.accountId === String(accountId));
+  });
+  document.getElementById("platformModalTitle").textContent = account.account_name;
+  document.getElementById("platformModalMeta").textContent =
+    `${account.plan_name} - ${account.subscription_status} - refresh ${fmtDateTime(account.next_token_refresh_at)}`;
+  document.getElementById("platformBalanceTotal").textContent = account.token_balances.total;
+  document.getElementById("platformBalanceMonthly").textContent = account.token_balances.monthly;
+  document.getElementById("platformBalancePurchased").textContent = account.token_balances.purchased;
+  document.getElementById("platformBalanceGranted").textContent = account.token_balances.granted;
+  document.getElementById("platformPlanCode").value = account.plan_code;
+  document.getElementById("platformBillingCycleInput").value = account.billing_cycle;
+  document.getElementById("platformSubscriptionStatusInput").value = account.subscription_status;
+  document.getElementById("platformRefreshInput").value = toLocalDateTimeInput(account.next_token_refresh_at);
+  renderPlatformUsers(account.users || []);
+  renderPlatformLedger(account.token_ledger || []);
+  renderPlatformAudit(account.admin_audit_log || []);
+  openModal("platformAccountModal");
+}
+
+function renderPlatformUsers(users) {
+  const container = document.getElementById("platformUsersList");
+  container.innerHTML = "";
+  if (!users.length) {
+    container.innerHTML = `<div class="empty-msg compact-empty">No users found for this account.</div>`;
+    return;
+  }
+  users.forEach((user) => {
+    const row = document.createElement("div");
+    row.className = "activity-item";
+    row.innerHTML = `
+      <div>
+        <div>${esc(user.username)}</div>
+        <div class="activity-meta">${esc(user.role)} - ${user.is_active ? "active" : "inactive"} - updated ${fmtDateTime(user.updated_at)}</div>
+      </div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderPlatformLedger(items) {
+  const container = document.getElementById("platformLedgerList");
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = `<div class="empty-msg compact-empty">No token activity yet.</div>`;
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "activity-item";
+    const deltaClass = item.token_delta >= 0 ? "positive" : "negative";
+    row.innerHTML = `
+      <div>
+        <div>${esc(item.description)}</div>
+        <div class="activity-meta">${esc(item.username || "system")} - ${fmtDateTime(item.created_at)}</div>
+      </div>
+      <div class="token-delta ${deltaClass}">${item.token_delta > 0 ? "+" : ""}${item.token_delta}</div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderPlatformAudit(items) {
+  const container = document.getElementById("platformAuditList");
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = `<div class="empty-msg compact-empty">No admin actions recorded yet.</div>`;
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "activity-item";
+    const metaParts = [esc(item.username || "system"), fmtDateTime(item.created_at)];
+    const changeCount = Object.keys(item.metadata?.changed_fields || {}).length;
+    row.innerHTML = `
+      <div>
+        <div>${esc(item.description)}</div>
+        <div class="activity-meta">${metaParts.join(" - ")}${changeCount ? ` - ${changeCount} field${changeCount === 1 ? "" : "s"} changed` : ""}</div>
+      </div>
+      <div class="activity-tag">${esc(item.event_type)}</div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+async function refreshSelectedPlatformAccount() {
+  if (!selectedPlatformAccountId) return;
+  await loadPlatformAccounts();
+  await selectPlatformAccount(selectedPlatformAccountId);
+}
+
+async function savePlatformAccountSettings() {
+  if (!selectedPlatformAccountId) {
+    alert("Select an account first.");
+    return;
+  }
+  const refreshValue = document.getElementById("platformRefreshInput").value;
+  const payload = {
+    plan_code: document.getElementById("platformPlanCode").value,
+    billing_cycle: document.getElementById("platformBillingCycleInput").value,
+    subscription_status: document.getElementById("platformSubscriptionStatusInput").value,
+    next_token_refresh_at: refreshValue ? new Date(refreshValue).toISOString() : null,
+  };
+  try {
+    await apiJson(`/api/platform/accounts/${selectedPlatformAccountId}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await refreshSelectedPlatformAccount();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function grantPlatformTokens() {
+  if (!selectedPlatformAccountId) {
+    alert("Select an account first.");
+    return;
+  }
+  const tokenCount = parseInt(document.getElementById("platformGrantTokenCount").value, 10);
+  const note = document.getElementById("platformGrantTokenNote").value.trim();
+  if (!tokenCount) {
+    alert("Enter a token count.");
+    return;
+  }
+  try {
+    await apiJson(`/api/platform/accounts/${selectedPlatformAccountId}/grant-tokens`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token_count: tokenCount, note }),
+    });
+    document.getElementById("platformGrantTokenCount").value = "";
+    document.getElementById("platformGrantTokenNote").value = "";
+    await refreshSelectedPlatformAccount();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function removePlatformTokens() {
+  if (!selectedPlatformAccountId) {
+    alert("Select an account first.");
+    return;
+  }
+  const tokenCount = parseInt(document.getElementById("platformRemoveTokenCount").value, 10);
+  const note = document.getElementById("platformRemoveTokenNote").value.trim();
+  if (!tokenCount) {
+    alert("Enter a token count.");
+    return;
+  }
+  openConfirmModal({
+    title: "Remove Tokens",
+    message: `Remove ${tokenCount} token${tokenCount === 1 ? "" : "s"} from this account?`,
+    okText: "Remove",
+    onOk: async () => {
+      await apiJson(`/api/platform/accounts/${selectedPlatformAccountId}/remove-tokens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token_count: tokenCount, note }),
+      });
+      document.getElementById("platformRemoveTokenCount").value = "";
+      document.getElementById("platformRemoveTokenNote").value = "";
+      await refreshSelectedPlatformAccount();
+    },
+  });
+}
+
+async function forcePlatformRefreshNow() {
+  if (!selectedPlatformAccountId) {
+    alert("Select an account first.");
+    return;
+  }
+  openConfirmModal({
+    title: "Refresh Tokens Now",
+    message: "This will apply the token refresh cycle immediately for the selected account.",
+    okText: "Refresh Now",
+    onOk: async () => {
+      await apiJson(`/api/platform/accounts/${selectedPlatformAccountId}/refresh-now`, {
+        method: "POST",
+      });
+      await refreshSelectedPlatformAccount();
+    },
+  });
+}
+
+function renderFeatures(features) {
+  const labels = {
+    domain_scan: "Domain scan",
+    cybersecurity_lead_score: "Cybersecurity lead score",
+    clear_explanation_of_findings: "Clear explanation of findings",
+    basic_scan_history: "Basic scan history",
+    expanded_scan_history: "Expanded scan history",
+    basic_pdf_report: "Basic PDF report",
+    csv_export: "CSV export",
+    filter_sorting: "Filter and sorting",
+    conversation_starter: "Conversation starter",
+    lead_notes: "Lead notes",
+    follow_up_status: "Follow-up status",
+    scan_comparison: "Scan comparison",
+    crm_integration: "CRM integration",
+    api_access: "API access",
+    two_level_reporting: "Two-level reporting",
+    advanced_filters: "Advanced filters",
+    advanced_sales_advice: "Advanced sales advice",
+    white_label_reports: "White-label reports",
+    custom_scoring_model: "Custom scoring model",
+    custom_report_templates: "Custom report templates",
+    priority_support: "Priority support",
+    onboarding_support_package: "Onboarding/support package",
+    lead_potential_ranking: "Lead potential ranking",
+    export_options: "Export options",
+    team_usage: "Team usage",
+    custom_scan_volume: "Custom scan volume",
+  };
+
+  const container = document.getElementById("featureList");
+  container.innerHTML = "";
+  Object.entries(labels).forEach(([key, label]) => {
+    const value = features[key];
+    if (value == null) return;
+    const item = document.createElement("div");
+    item.className = "feature-item";
+    item.innerHTML = `<span>${label}</span><strong>${esc(fmtFeatureValue(value))}</strong>`;
+    container.appendChild(item);
+  });
+}
+
+async function loadTokenLedger() {
+  if (appMode !== "account") return;
+  const items = await apiJson("/api/account/token-ledger");
+  const box = document.getElementById("tokenLedger");
+  box.innerHTML = "";
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "activity-item";
+    const deltaClass = item.token_delta >= 0 ? "positive" : "negative";
+    row.innerHTML = `
+      <div>
+        <div>${esc(item.description)}</div>
+        <div class="activity-meta">${esc(item.username || "system")} - ${fmtDateTime(item.created_at)}</div>
+      </div>
+      <div class="token-delta ${deltaClass}">${item.token_delta > 0 ? "+" : ""}${item.token_delta}</div>
+    `;
+    box.appendChild(row);
+  });
+}
+
+async function loadUsers() {
+  if (appMode !== "account") return;
+  const users = await apiJson("/api/account/users");
+  const tbody = document.getElementById("userBody");
+  tbody.innerHTML = "";
+  users.forEach((user) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(user.username)}</td>
+      <td>${esc(user.role)}</td>
+      <td>${fmtDateTime(user.updated_at)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function createUser() {
+  const username = document.getElementById("newUsername").value.trim();
+  const password = document.getElementById("newPassword").value;
+  const role = document.getElementById("newRole").value;
+  if (!username || !password) {
+    alert("Username and password are required.");
+    return;
+  }
+  try {
+    await apiJson("/api/account/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, role }),
+    });
+    document.getElementById("newUsername").value = "";
+    document.getElementById("newPassword").value = "";
+    document.getElementById("newRole").value = "member";
+    await loadAccountSummary();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function filteredCompanies() {
+  const query = document.getElementById("companySearch").value.trim().toLowerCase();
+  if (!query) return companies;
+  return companies.filter((company) =>
+    [company.name, company.domain, company.sector].some((value) =>
+      String(value || "").toLowerCase().includes(query),
+    ),
+  );
+}
+
 function refreshCompanyTable() {
   const tbody = document.getElementById("companyBody");
   const empty = document.getElementById("companyEmpty");
   const count = document.getElementById("companyCount");
 
+  const visible = filteredCompanies();
   tbody.innerHTML = "";
   count.textContent = companies.length;
-  empty.style.display = companies.length ? "none" : "block";
+  empty.style.display = visible.length ? "none" : "block";
 
-  companies.forEach((c, i) => {
+  visible.forEach((company, index) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-            <td>${i + 1}</td>
-            <td>${esc(c.name)}</td>
-            <td>${esc(c.domain)}</td>
-            <td>${esc(c.sector)}</td>
-            <td>${c.employees}</td>
-            <td><button class="btn btn-ghost" style="padding:0.2rem 0.5rem;font-size:0.8rem" onclick="removeCompany(${c.id})">✕</button></td>
-        `;
+      <td>${index + 1}</td>
+      <td>${esc(company.name)}</td>
+      <td>${esc(company.domain)}</td>
+      <td>${esc(company.sector)}</td>
+      <td>${company.employees}</td>
+      <td><button class="btn btn-ghost compact-btn" onclick="removeCompany(${company.id})">x</button></td>
+    `;
     tbody.appendChild(tr);
   });
+}
+
+function refreshResultFilterOptions() {
+  const sectorFilter = document.getElementById("resultSectorFilter");
+  const statusFilter = document.getElementById("resultStatusFilter");
+  const previousSector = sectorFilter?.value || "";
+  const previousStatus = statusFilter?.value || "";
+  const sectors = Array.from(new Set(results.map((result) => String(result.sector || "Unknown"))))
+    .sort((a, b) => a.localeCompare(b));
+  if (sectorFilter) {
+    sectorFilter.innerHTML = `<option value="">All Sectors</option>`;
+    sectors.forEach((sector) => {
+      const option = document.createElement("option");
+      option.value = sector;
+      option.textContent = sector;
+      sectorFilter.appendChild(option);
+    });
+    sectorFilter.value = sectors.includes(previousSector) ? previousSector : "";
+  }
+  if (statusFilter) {
+    const statuses = Array.from(
+      new Set(
+        results
+          .map((result) => String(result.follow_up_status || ""))
+          .filter((value) => value),
+      ),
+    );
+    const allowedStatuses = accountSummary?.allowed_follow_up_statuses || statuses;
+    statusFilter.innerHTML = `<option value="">All Statuses</option>`;
+    allowedStatuses.forEach((status) => {
+      const option = document.createElement("option");
+      option.value = status;
+      option.textContent = status;
+      statusFilter.appendChild(option);
+    });
+    statusFilter.value = allowedStatuses.includes(previousStatus) ? previousStatus : "";
+  }
+}
+
+function sortableValue(result, column) {
+  switch (column) {
+    case "company":
+      return String(result.company_name || "").toLowerCase();
+    case "domain":
+      return String(result.domain || "").toLowerCase();
+    case "sector":
+      return String(result.sector || "").toLowerCase();
+    case "employees":
+      return Number(result.employees || 0);
+    case "score":
+      return Number(result.total_score || 0);
+    case "tier":
+      return String(result.tier || "").toUpperCase();
+    case "findings":
+      return Number(result.findings_count || 0);
+    case "status":
+      return String(result.follow_up_status || "").toLowerCase();
+    case "rank":
+    default:
+      return Number(result.total_score || 0);
+  }
+}
+
+function applyAdvancedSort(items) {
+  if (filterMode() !== "advanced") return items;
+  const manualSort = document.getElementById("resultSort")?.value || "default";
+  if (manualSort === "scoreAsc") {
+    items.sort((a, b) => a.total_score - b.total_score);
+    return items;
+  }
+  if (manualSort === "scoreDesc") {
+    items.sort((a, b) => b.total_score - a.total_score);
+    return items;
+  }
+  if (manualSort === "companyAsc") {
+    items.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)));
+    return items;
+  }
+  const directionFactor = currentTableSort.direction === "desc" ? -1 : 1;
+  items.sort((a, b) => {
+    const aVal = sortableValue(a, currentTableSort.column);
+    const bVal = sortableValue(b, currentTableSort.column);
+    if (aVal < bVal) return -1 * directionFactor;
+    if (aVal > bVal) return 1 * directionFactor;
+    return 0;
+  });
+  return items;
+}
+
+function setTableSort(column) {
+  if (filterMode() !== "advanced") return;
+  if (currentTableSort.column === column) {
+    currentTableSort.direction = currentTableSort.direction === "asc" ? "desc" : "asc";
+  } else {
+    currentTableSort.column = column;
+    currentTableSort.direction = "asc";
+  }
+  const sortSelect = document.getElementById("resultSort");
+  if (sortSelect) sortSelect.value = "default";
+  updateResults(results);
+}
+
+async function loadCompanies() {
+  if (appMode !== "account") return;
+  companies = await apiJson("/api/companies");
+  refreshCompanyTable();
 }
 
 async function submitAddCompany() {
   const name = document.getElementById("addName").value.trim();
   const domain = document.getElementById("addDomain").value.trim();
   const sector = document.getElementById("addSector").value.trim() || "Unknown";
-  const employees =
-    parseInt(document.getElementById("addEmployees").value) || 100;
-
+  const employees = parseInt(document.getElementById("addEmployees").value, 10) || 100;
   if (!name || !domain) {
     alert("Name and domain are required.");
     return;
   }
-
-  const res = await fetch("/api/companies", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, domain, sector, employees }),
-  });
-  const data = await res.json();
-  if (data.ok) {
+  try {
+    await apiJson("/api/companies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, domain, sector, employees }),
+    });
     await loadCompanies();
     closeModal("addModal");
-    // Reset form
     document.getElementById("addName").value = "";
     document.getElementById("addDomain").value = "";
     document.getElementById("addSector").value = "Unknown";
     document.getElementById("addEmployees").value = "100";
-  } else {
-    alert(data.error || "Failed to add company");
+  } catch (error) {
+    alert(error.message);
   }
 }
 
@@ -128,48 +735,36 @@ async function submitUpload() {
     alert("Select a file first.");
     return;
   }
-
   const formData = new FormData();
   formData.append("file", fileInput.files[0]);
-
-  const res = await fetch("/api/upload", { method: "POST", body: formData });
-  const data = await res.json();
-  if (data.ok) {
-    // Refresh from server
+  try {
+    await apiJson("/api/upload", { method: "POST", body: formData });
     await loadCompanies();
     closeModal("uploadModal");
     fileInput.value = "";
-  } else {
-    alert(data.error || "Upload failed");
+  } catch (error) {
+    alert(error.message);
   }
 }
 
 async function removeCompany(companyId) {
   await fetch(`/api/companies/${companyId}`, { method: "DELETE" });
-  companies = companies.filter((c) => c.id !== companyId);
+  companies = companies.filter((company) => company.id !== companyId);
   refreshCompanyTable();
 }
 
 async function clearCompanies() {
-  if (companies.length && !confirm("Clear all companies?")) return;
-  await fetch("/api/companies", { method: "DELETE" });
-  companies = [];
-  refreshCompanyTable();
-}
-
-async function loadCompanies() {
-  const res = await fetch("/api/companies");
-  companies = await res.json();
-  refreshCompanyTable();
-}
-
-// ─── History ───
-function fmtDateTime(iso) {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return String(iso || "");
-  }
+  if (companies.length === 0) return;
+  openConfirmModal({
+    title: "Clear Companies",
+    message: "This removes the current shared company list for the account.",
+    okText: "Clear",
+    onOk: async () => {
+      await fetch("/api/companies", { method: "DELETE" });
+      companies = [];
+      refreshCompanyTable();
+    },
+  });
 }
 
 function renderPager(el, page, pageSize, total, onPage) {
@@ -202,111 +797,78 @@ function openHistoryReport(path) {
 }
 
 async function loadScanHistory(page = scanHistoryPage) {
+  if (appMode !== "account") return;
   scanHistoryPage = page;
-  const res = await fetch(
+  const data = await apiJson(
     `/api/history/scans?page=${encodeURIComponent(page)}&page_size=${HISTORY_PAGE_SIZE}`,
   );
-  const data = await res.json();
-
   const tbody = document.getElementById("scanHistoryBody");
   tbody.innerHTML = "";
-  (data.items || []).forEach((r) => {
+  (data.items || []).forEach((item) => {
+    const expandedHistory = featureEnabled("expanded_scan_history");
+    const hotCell = expandedHistory ? `<td>${item.hot_leads_count ?? 0}</td>` : "";
+    const warmCell = expandedHistory ? `<td>${item.warm_leads_count ?? 0}</td>` : "";
+    const coolCell = expandedHistory ? `<td>${item.cool_leads_count ?? 0}</td>` : "";
     const tr = document.createElement("tr");
-
-    const tdDt = document.createElement("td");
-    tdDt.textContent = fmtDateTime(r.created_at);
-
-    const tdCnt = document.createElement("td");
-    tdCnt.textContent = String(r.domain_count ?? "");
-
-    const tdAct = document.createElement("td");
-    const btn = document.createElement("button");
-    btn.className = "btn btn-secondary";
-    btn.style.padding = "0.35rem 0.7rem";
-    btn.textContent = "Open";
-    btn.onclick = () => openHistoryReport(r.report_html_path);
-    tdAct.appendChild(btn);
-
-    tr.appendChild(tdDt);
-    tr.appendChild(tdCnt);
-    tr.appendChild(tdAct);
+    tr.innerHTML = `
+      <td>${fmtDateTime(item.created_at)}</td>
+      <td>${item.domain_count ?? ""}</td>
+      ${hotCell}
+      ${warmCell}
+      ${coolCell}
+      <td><button class="btn btn-secondary compact-btn" onclick="openHistoryReport('${esc(item.report_html_path)}')">Open</button></td>
+    `;
     tbody.appendChild(tr);
   });
-
   renderPager(
     document.getElementById("scanHistoryPager"),
     data.page || page,
     data.page_size || HISTORY_PAGE_SIZE,
     data.total || 0,
-    (p) => loadScanHistory(p),
+    (nextPage) => loadScanHistory(nextPage),
   );
 }
 
 async function loadDomainListHistory(page = domainListHistoryPage) {
+  if (appMode !== "account") return;
   domainListHistoryPage = page;
-  const res = await fetch(
+  const data = await apiJson(
     `/api/history/domain-lists?page=${encodeURIComponent(page)}&page_size=${HISTORY_PAGE_SIZE}`,
   );
-  const data = await res.json();
-
   const tbody = document.getElementById("domainListHistoryBody");
   tbody.innerHTML = "";
-  (data.items || []).forEach((r) => {
+  (data.items || []).forEach((item) => {
     const tr = document.createElement("tr");
-
-    const tdDt = document.createElement("td");
-    tdDt.textContent = fmtDateTime(r.created_at);
-
-    const tdCnt = document.createElement("td");
-    tdCnt.textContent = String(r.domain_count ?? "");
-
-    const tdAct = document.createElement("td");
-
-    const btn = document.createElement("button");
-    btn.className = "btn btn-secondary";
-    btn.style.padding = "0.35rem 0.7rem";
-    btn.textContent = "View";
-    btn.onclick = () => viewDomainList(r.id);
-    tdAct.appendChild(btn);
-
-    const useBtn = document.createElement("button");
-    useBtn.className = "btn btn-primary";
-    useBtn.style.padding = "0.35rem 0.7rem";
-    useBtn.style.marginLeft = "0.5rem";
-    useBtn.textContent = "Use";
-    useBtn.onclick = () => promptUseDomainList(r.id, r.domain_count);
-    tdAct.appendChild(useBtn);
-
-    tr.appendChild(tdDt);
-    tr.appendChild(tdCnt);
-    tr.appendChild(tdAct);
+    tr.innerHTML = `
+      <td>${fmtDateTime(item.created_at)}</td>
+      <td>${item.domain_count ?? ""}</td>
+      <td>
+        <button class="btn btn-secondary compact-btn" onclick="viewDomainList(${item.id})">View</button>
+        <button class="btn btn-primary compact-btn" onclick="promptUseDomainList(${item.id}, ${item.domain_count || 0})">Use</button>
+      </td>
+    `;
     tbody.appendChild(tr);
   });
-
   renderPager(
     document.getElementById("domainListHistoryPager"),
     data.page || page,
     data.page_size || HISTORY_PAGE_SIZE,
     data.total || 0,
-    (p) => loadDomainListHistory(p),
+    (nextPage) => loadDomainListHistory(nextPage),
   );
 }
 
 async function viewDomainList(domainListId) {
-  const res = await fetch(`/api/history/domain-lists/${domainListId}`);
-  const data = await res.json();
+  const data = await apiJson(`/api/history/domain-lists/${domainListId}`);
   const items = data.items || [];
-
   document.getElementById("detailTitle").textContent =
     `Domain List #${domainListId} (${items.length})`;
-
   let html =
-    `<div class="table-wrap"><table class="data-table"><thead><tr><th>#</th><th>Company</th><th>Domain</th></tr></thead><tbody>`;
-  items.forEach((it, i) => {
-    html += `<tr><td>${i + 1}</td><td>${esc(it.name)}</td><td>${esc(it.domain)}</td></tr>`;
+    `<div class="table-wrap"><table class="data-table"><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Sector</th></tr></thead><tbody>`;
+  items.forEach((item, index) => {
+    html += `<tr><td>${index + 1}</td><td>${esc(item.name)}</td><td>${esc(item.domain)}</td><td>${esc(item.sector)}</td></tr>`;
   });
-  html += `</tbody></table></div>`;
-
+  html += "</tbody></table></div>";
   document.getElementById("detailBody").innerHTML = html;
   openModal("detailModal");
 }
@@ -314,67 +876,52 @@ async function viewDomainList(domainListId) {
 function promptUseDomainList(domainListId, domainCount) {
   openConfirmModal({
     title: "Use Domain List",
-    message:
-      `This will replace your current Companies to Scan list with Domain List #${domainListId} ` +
-      `(${domainCount ?? "?"} domains). Continue?`,
+    message: `Replace the current shared company list with Domain List #${domainListId} (${domainCount} domains)?`,
     okText: "Use List",
-    onOk: () => useDomainListNow(domainListId),
+    onOk: async () => {
+      await apiJson(`/api/history/domain-lists/${domainListId}/use`, { method: "POST" });
+      await loadCompanies();
+    },
   });
 }
 
-async function useDomainListNow(domainListId) {
-  const res = await fetch(`/api/history/domain-lists/${domainListId}/use`, {
-    method: "POST",
-  });
-  const data = await res.json();
-  if (!data.ok) {
-    alert(data.error || "Failed to use domain list");
-    return;
-  }
-
-  await loadCompanies();
-  await loadDomainListHistory(domainListHistoryPage);
-}
-
-// ─── Scanning ───
 async function startScan() {
+  if (appMode !== "account") return;
   if (!companies.length) {
     alert("Add companies first.");
     return;
   }
-
   const timeout = parseFloat(document.getElementById("cfgTimeout").value) || 8;
   const delay = parseFloat(document.getElementById("cfgDelay").value) || 1;
   const verbose = document.getElementById("cfgVerbose").checked;
 
   results = [];
   reportHtmlPath = null;
+  pdfPaths = {};
   document.getElementById("resultsBody").innerHTML = "";
   document.getElementById("logBox").textContent = "";
   document.getElementById("progressBar").style.width = "0%";
 
-  const res = await fetch("/api/scan/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ timeout, delay, verbose }),
-  });
-  const data = await res.json();
-  if (!data.ok) {
-    alert(data.error || "Failed to start scan");
-    return;
+  try {
+    const data = await apiJson("/api/scan/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timeout, delay, verbose }),
+    });
+    setSectionVisibility("progressSection", true);
+    setSectionVisibility("statsSection", true);
+    setSectionVisibility("resultsSection", true);
+    setSectionVisibility("logSection", true);
+    document.getElementById("btnStartScan").disabled = true;
+    document.getElementById("btnStopScan").disabled = false;
+    document.getElementById("btnOpenReport").style.display = "none";
+    if (data.token_balances) {
+      await loadAccountSummary();
+    }
+    startEventStream();
+  } catch (error) {
+    alert(error.message);
   }
-
-  // Show sections
-  show("progressSection");
-  show("statsSection");
-  show("resultsSection");
-  show("logSection");
-
-  document.getElementById("btnStartScan").disabled = true;
-  document.getElementById("btnStopScan").disabled = false;
-  document.getElementById("btnOpenReport").style.display = "none";
-
-  startEventStream();
 }
 
 async function stopScan() {
@@ -396,11 +943,9 @@ function startEventStream() {
       reportHtmlPath = data.report_html;
       document.getElementById("btnOpenReport").style.display = "";
     }
-
     if (data.pdf_paths) {
       pdfPaths = data.pdf_paths;
     }
-
     if (!data.running) {
       eventSource.close();
       eventSource = null;
@@ -408,6 +953,7 @@ function startEventStream() {
       document.getElementById("btnStopScan").disabled = true;
       loadScanHistory(1);
       loadDomainListHistory(1);
+      loadAccountSummary();
     }
   };
 
@@ -421,46 +967,116 @@ function startEventStream() {
 
 function updateProgress(data) {
   const pct = data.total ? Math.round((data.progress / data.total) * 100) : 0;
-  document.getElementById("progressBar").style.width = pct + "%";
+  document.getElementById("progressBar").style.width = `${pct}%`;
   document.getElementById("progressText").textContent =
     `${data.progress} / ${data.total}` +
-    (data.current_company ? `  —  ${data.current_company}` : "");
+    (data.current_company ? ` - ${data.current_company}` : "");
+}
+
+function filteredResults() {
+  const query = document.getElementById("resultSearch").value.trim().toLowerCase();
+  const sort = document.getElementById("resultSort").value;
+  const tierFilter = document.getElementById("resultTierFilter")?.value || "";
+  const sectorFilter = document.getElementById("resultSectorFilter")?.value || "";
+  const statusFilter = document.getElementById("resultStatusFilter")?.value || "";
+  const scoreMin = document.getElementById("resultScoreMin")?.value;
+  const scoreMax = document.getElementById("resultScoreMax")?.value;
+  const findingsMin = document.getElementById("resultFindingsMin")?.value;
+  const findingsMax = document.getElementById("resultFindingsMax")?.value;
+  const employeesMin = document.getElementById("resultEmployeesMin")?.value;
+  const employeesMax = document.getElementById("resultEmployeesMax")?.value;
+  let visible = [...results];
+
+  if (query) {
+    visible = visible.filter((result) =>
+      [
+        result.company_name,
+        result.domain,
+        result.sector,
+        featureEnabled("follow_up_status") ? result.follow_up_status : "",
+      ].some((value) =>
+        String(value || "").toLowerCase().includes(query),
+      ),
+    );
+  }
+
+  if (filterMode() === "basic" || filterMode() === "advanced") {
+    if (tierFilter) {
+      visible = visible.filter((result) => String(result.tier || "").toUpperCase().includes(tierFilter));
+    }
+    if (sectorFilter) {
+      visible = visible.filter((result) => String(result.sector || "Unknown") === sectorFilter);
+    }
+  }
+
+  if (filterMode() === "advanced") {
+    if (statusFilter && featureEnabled("follow_up_status")) {
+      visible = visible.filter((result) => String(result.follow_up_status || "") === statusFilter);
+    }
+    if (scoreMin !== "") {
+      visible = visible.filter((result) => Number(result.total_score || 0) >= Number(scoreMin));
+    }
+    if (scoreMax !== "") {
+      visible = visible.filter((result) => Number(result.total_score || 0) <= Number(scoreMax));
+    }
+    if (findingsMin !== "") {
+      visible = visible.filter((result) => Number(result.findings_count || 0) >= Number(findingsMin));
+    }
+    if (findingsMax !== "") {
+      visible = visible.filter((result) => Number(result.findings_count || 0) <= Number(findingsMax));
+    }
+    if (employeesMin !== "") {
+      visible = visible.filter((result) => Number(result.employees || 0) >= Number(employeesMin));
+    }
+    if (employeesMax !== "") {
+      visible = visible.filter((result) => Number(result.employees || 0) <= Number(employeesMax));
+    }
+    if (sort === "default") {
+      applyAdvancedSort(visible);
+    } else if (sort === "scoreAsc") {
+      visible.sort((a, b) => a.total_score - b.total_score);
+    } else if (sort === "scoreDesc") {
+      visible.sort((a, b) => b.total_score - a.total_score);
+    } else if (sort === "companyAsc") {
+      visible.sort((a, b) => String(a.company_name).localeCompare(String(b.company_name)));
+    }
+  }
+  return visible;
 }
 
 function updateResults(newResults) {
   results = newResults;
+  refreshResultFilterOptions();
   const tbody = document.getElementById("resultsBody");
   tbody.innerHTML = "";
 
-  let hot = 0,
-    warm = 0,
-    cool = 0;
+  let hot = 0;
+  let warm = 0;
+  let cool = 0;
 
-  results.forEach((r, i) => {
-    const tierClass = r.tier.includes("HOT")
-      ? "hot"
-      : r.tier.includes("WARM")
-        ? "warm"
-        : "cool";
-    if (tierClass === "hot") hot++;
-    else if (tierClass === "warm") warm++;
-    else cool++;
+  filteredResults().forEach((result, index) => {
+    const tierClass = tierClassFor(result.tier);
+    if (tierClass === "hot") hot += 1;
+    else if (tierClass === "warm") warm += 1;
+    else cool += 1;
 
-    const hasPdf = pdfPaths[r.domain];
+    const hasPdf = pdfPaths[result.domain];
+    const statusCellStyle = featureEnabled("follow_up_status") ? "" : ' style="display:none"';
     const tr = document.createElement("tr");
     tr.innerHTML = `
-            <td>${i + 1}</td>
-            <td><span class="tier tier-${tierClass}">${esc(r.tier)}</span></td>
-            <td>${esc(r.company_name)}</td>
-            <td>${esc(r.domain)}</td>
-            <td>${r.total_score.toFixed(1)} / ${r.max_score}</td>
-            <td>${r.findings_count}</td>
-            <td>${esc(r.sector)}</td>
-            <td>
-                ${hasPdf ? `<button class="btn btn-ghost" style="padding:0.2rem 0.5rem;font-size:0.8rem" onclick="downloadPdf('${esc(r.domain)}')" title="Download PDF">📄</button>` : ""}
-                <button class="btn btn-detail" onclick="showDetail(${i})">Details</button>
-            </td>
-        `;
+      <td>${index + 1}</td>
+      <td><span class="tier tier-${tierClass}">${esc(result.tier)}</span></td>
+      <td>${esc(result.company_name)}</td>
+      <td>${esc(result.domain)}</td>
+      <td>${result.total_score.toFixed(1)} / ${result.max_score}</td>
+      <td>${result.findings_count}</td>
+      <td${statusCellStyle}>${esc(result.follow_up_status || "new")}</td>
+      <td>${Number(result.employees || 0).toLocaleString()}</td>
+      <td>
+        ${hasPdf ? `<button class="btn btn-ghost compact-btn" onclick="downloadPdf('${encodeURIComponent(result.domain)}')">PDF</button>` : ""}
+        <button class="btn btn-detail" onclick="showDetail('${encodeURIComponent(result.domain)}')">Details</button>
+      </td>
+    `;
     tbody.appendChild(tr);
   });
 
@@ -473,17 +1089,32 @@ function updateResults(newResults) {
 function appendLogs(lines) {
   if (!lines || !lines.length) return;
   const box = document.getElementById("logBox");
-  box.textContent += lines.join("\n") + "\n";
+  box.textContent += `${lines.join("\n")}\n`;
   box.scrollTop = box.scrollHeight;
 }
 
-// ─── Detail View ───
-function showDetail(idx) {
-  const r = results[idx];
-  if (!r) return;
+async function showDetail(encodedDomain) {
+  const domain = decodeURIComponent(encodedDomain);
+  const result = results.find((item) => item.domain === domain);
+  if (!result) return;
+
+  if (leadWorkspaceEnabled()) {
+    const noteData = await apiJson(`/api/lead-notes/${encodeURIComponent(domain)}`);
+    result.lead_notes = noteData.notes || "";
+    result.follow_up_status = noteData.follow_up_status || "new";
+  }
+
+  let comparison = null;
+  if (featureEnabled("scan_comparison")) {
+    try {
+      comparison = await apiJson(`/api/compare/domain/${encodeURIComponent(domain)}`);
+    } catch {
+      comparison = null;
+    }
+  }
 
   document.getElementById("detailTitle").textContent =
-    `${r.company_name} — ${r.tier}`;
+    `${result.company_name} - ${result.tier}`;
 
   const dimensionLabels = {
     email_security: "Email Security",
@@ -494,101 +1125,111 @@ function showDetail(idx) {
     attack_surface: "Attack Surface",
     tech_stack: "Tech Stack",
     admin_panel: "Admin Exposure",
-    security_hiring: "Security Hiring",
-    security_governance: "Security Governance",
-    security_communication: "Security Communication",
-    nis2_readiness: "NIS2 Readiness",
   };
 
-  const nis2 = r.nis2 || {};
-
   let html = `
-        <div class="detail-grid">
-            <div><div class="detail-item-label">Domain</div><div class="detail-item-value">${esc(r.domain)}</div></div>
-            <div><div class="detail-item-label">Sector</div><div class="detail-item-value">${esc(r.sector)}</div></div>
-            <div><div class="detail-item-label">Employees</div><div class="detail-item-value">${r.employees}</div></div>
-            <div><div class="detail-item-label">Score</div><div class="detail-item-value">${r.total_score.toFixed(1)} / ${r.max_score}</div></div>
-            <div><div class="detail-item-label">NIS2 Covered</div><div class="detail-item-value">${nis2.covered ? "Yes" : "No"}</div></div>
-            <div><div class="detail-item-label">Compliance Priority</div><div class="detail-item-value">${esc(nis2.compliance_priority || "N/A")}</div></div>
-        </div>
-    `;
+    <div class="detail-grid">
+      <div><div class="detail-item-label">Domain</div><div class="detail-item-value">${esc(result.domain)}</div></div>
+      <div><div class="detail-item-label">Sector</div><div class="detail-item-value">${esc(result.sector)}</div></div>
+      <div><div class="detail-item-label">Employees</div><div class="detail-item-value">${result.employees}</div></div>
+      <div><div class="detail-item-label">Score</div><div class="detail-item-value">${result.total_score.toFixed(1)} / ${result.max_score}</div></div>
+    </div>
+  `;
 
-  if (r.management_summary) {
-    html += `<div class="detail-section"><h4>Management Summary</h4><p style="font-size:0.88rem;color:var(--text-secondary)">${esc(r.management_summary)}</p></div>`;
+  if (result.management_summary) {
+    html += `<div class="detail-section"><h4>Management Summary</h4><p class="section-meta">${esc(result.management_summary)}</p></div>`;
   }
 
-  // Score breakdown
   html += `<div class="detail-section"><h4>Score Breakdown</h4>`;
-  const scores = r.scores || {};
+  const scores = result.scores || {};
   for (const [key, label] of Object.entries(dimensionLabels)) {
-    const s = scores[key] || {};
-    const analyzed = typeof s.score === "number" && typeof s.max_score === "number";
-    const scoreText = analyzed ? `${s.score}/${s.max_score}` : "N/A";
-
-    // In the popup we highlight "missing points" as orange (e.g. 2/3),
-    // even if the percentage would otherwise be green.
+    const score = scores[key] || {};
+    const analyzed = typeof score.score === "number" && typeof score.max_score === "number";
+    const scoreText = analyzed ? `${score.score}/${score.max_score}` : "N/A";
     let status = "unknown";
     if (analyzed) {
-      status = s.score === 0 ? "risk" : s.score < s.max_score ? "warning" : "ok";
+      status = score.score === 0 ? "risk" : score.score < score.max_score ? "warning" : "ok";
     }
     html += `<div class="score-row"><span><span class="indicator indicator-${status}"></span>${label}</span><span class="score-val">${scoreText}</span></div>`;
   }
   html += `</div>`;
 
-  // Key gaps
-  if (r.key_gaps && r.key_gaps.length) {
+  if (result.key_gaps && result.key_gaps.length) {
     html += `<div class="detail-section"><h4>Key Gaps</h4>`;
-    r.key_gaps.forEach((g) => {
-      html += `<div class="gap-item gap-key">⚠ ${esc(g)}</div>`;
+    result.key_gaps.forEach((gap) => {
+      html += `<div class="gap-item gap-key">${esc(gap)}</div>`;
     });
     html += `</div>`;
   }
 
-  // Sales angles
-  if (r.sales_angles && r.sales_angles.length) {
-    html += `<div class="detail-section"><h4>Sales Angles</h4>`;
-    r.sales_angles.forEach((s) => {
-      html += `<div class="sales-item">→ ${esc(s)}</div>`;
+  if ((accountSummary?.features?.conversation_starter || false) && result.sales_angles && result.sales_angles.length) {
+    html += `<div class="detail-section"><h4>${featureEnabled("advanced_sales_advice") ? "Recommended Sales Approach" : "Conversation Starters"}</h4>`;
+    result.sales_angles.forEach((angle) => {
+      html += `<div class="sales-item">${esc(angle)}</div>`;
     });
     html += `</div>`;
   }
 
-  // Recommendations (present vs missing, color-coded)
-  const dimensionSummaries = [];
-  for (const [key, label] of Object.entries(dimensionLabels)) {
-    const s = scores[key] || {};
-    const analyzed = typeof s.score === "number" && typeof s.max_score === "number";
-    if (!analyzed) continue;
-
-    const present = Array.isArray(s.present) ? s.present : [];
-    const missing = Array.isArray(s.missing) ? s.missing : [];
-    const risks = Array.isArray(s.risks) ? s.risks : [];
-
-    if (!present.length && !missing.length && !risks.length) continue;
-    dimensionSummaries.push({ label, present, missing, risks });
-  }
-
-  if (dimensionSummaries.length) {
-    html += `<div class="detail-section"><h4>Recommendations</h4>`;
-    dimensionSummaries.forEach((d) => {
-      html += `<div style="margin:0.6rem 0 0.2rem 0;font-weight:600">${esc(d.label)}</div>`;
-      d.present.forEach((p) => {
-        html += `<div class="pos-item rec-present">✓ ${esc(p)}</div>`;
+  if (comparison) {
+    const delta = comparison.delta || {};
+    const dimensions = comparison.dimension_deltas || [];
+    const added = comparison.added_key_gaps || [];
+    const resolved = comparison.resolved_key_gaps || [];
+    html += `<div class="detail-section"><h4>Scan Comparison</h4>
+      <div class="detail-grid">
+        <div><div class="detail-item-label">Current Score</div><div class="detail-item-value">${comparison.current.total_score} / ${comparison.current.max_score}</div></div>
+        <div><div class="detail-item-label">Previous Score</div><div class="detail-item-value">${comparison.previous.total_score} / ${comparison.previous.max_score}</div></div>
+        <div><div class="detail-item-label">Score Delta</div><div class="detail-item-value">${Number(delta.score || 0).toFixed(1)}</div></div>
+        <div><div class="detail-item-label">Findings Delta</div><div class="detail-item-value">${delta.findings_count || 0}</div></div>
+      </div>`;
+    if (dimensions.length) {
+      html += `<div class="detail-section"><h4>Dimension Changes</h4>`;
+      dimensions.forEach((item) => {
+        html += `<div class="score-row"><span>${esc(item.label)} (${item.previous_score}/${item.previous_max_score} -> ${item.current_score}/${item.current_max_score})</span><span class="score-val">${Number(item.delta).toFixed(1)}</span></div>`;
       });
-      d.missing.forEach((m) => {
-        html += `<div class="gap-item rec-missing">✕ ${esc(m)}</div>`;
+      html += `</div>`;
+    }
+    if (added.length) {
+      html += `<div class="detail-section"><h4>New Gaps Since Previous Scan</h4>`;
+      added.forEach((gap) => {
+        html += `<div class="gap-item gap-key">${esc(gap)}</div>`;
       });
-      if (d.risks.length) {
-        html += `<div class="risk-item rec-risk">Risk: ${esc(d.risks[0])}</div>`;
-      }
-    });
+      html += `</div>`;
+    }
+    if (resolved.length) {
+      html += `<div class="detail-section"><h4>Resolved Gaps Since Previous Scan</h4>`;
+      resolved.forEach((gap) => {
+        html += `<div class="sales-item">${esc(gap)}</div>`;
+      });
+      html += `</div>`;
+    }
     html += `</div>`;
   }
 
-  // PDF download button
-  if (pdfPaths[r.domain]) {
+  if (leadWorkspaceEnabled()) {
+    const allowedStatuses = accountSummary?.allowed_follow_up_statuses || ["new"];
+    const selectedStatus = allowedStatuses.includes(result.follow_up_status) ? result.follow_up_status : allowedStatuses[0];
+    html += `
+      <div class="detail-section">
+        <h4>Lead Workspace</h4>
+        <label class="form-label">Follow-up status
+          <select id="leadStatus" class="form-input">
+            ${allowedStatuses
+              .map((status) => `<option value="${status}" ${status === selectedStatus ? "selected" : ""}>${status}</option>`)
+              .join("")}
+          </select>
+        </label>
+        <label class="form-label">Notes
+          <textarea id="leadNotes" class="form-input textarea-input" rows="5">${esc(result.lead_notes || "")}</textarea>
+        </label>
+        <button class="btn btn-primary" onclick="saveLeadNote('${encodeURIComponent(result.domain)}')">Save Lead Workspace</button>
+      </div>
+    `;
+  }
+
+  if (pdfPaths[result.domain]) {
     html += `<div class="detail-section" style="text-align:center;margin-top:1rem">
-      <button class="btn btn-primary" onclick="downloadPdf('${esc(r.domain)}')">📄 Download PDF Report</button>
+      <button class="btn btn-secondary" onclick="downloadPdf('${encodeURIComponent(result.domain)}')">Download PDF Report</button>
     </div>`;
   }
 
@@ -596,63 +1237,97 @@ function showDetail(idx) {
   openModal("detailModal");
 }
 
-// ─── Export / Reports ───
+async function saveLeadNote(encodedDomain) {
+  const domain = decodeURIComponent(encodedDomain);
+  const notes = document.getElementById("leadNotes")?.value || "";
+  const followUpStatus = document.getElementById("leadStatus")?.value || "new";
+  try {
+    await apiJson(`/api/lead-notes/${encodeURIComponent(domain)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes, follow_up_status: followUpStatus }),
+    });
+    const result = results.find((item) => item.domain === domain);
+    if (result) {
+      result.lead_notes = notes;
+      result.follow_up_status = followUpStatus;
+    }
+    updateResults(results);
+    alert("Lead workspace saved.");
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
 function openReport() {
   if (reportHtmlPath) window.open(reportHtmlPath, "_blank");
 }
 
-function downloadPdf(domain) {
+function downloadPdf(encodedDomain) {
+  const domain = decodeURIComponent(encodedDomain);
   window.open(`/api/pdf/${encodeURIComponent(domain)}`, "_blank");
 }
 
 function exportJSON() {
+  if (!featureEnabled("export_options")) {
+    alert("JSON export is not available for this plan.");
+    return;
+  }
   if (!results.length) {
     alert("No results to export.");
     return;
   }
-  const blob = new Blob(
-    [
-      JSON.stringify(
-        { generated_at: new Date().toISOString(), leads: results },
-        null,
-        2,
-      ),
-    ],
-    { type: "application/json" },
-  );
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `lead_scout_export_${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  window.open("/api/export/json", "_blank");
 }
 
-// ─── Helpers ───
-function show(id) {
-  document.getElementById(id).style.display = "";
-}
-function hide(id) {
-  document.getElementById(id).style.display = "none";
-}
-
-function esc(str) {
-  if (str == null) return "";
-  const d = document.createElement("div");
-  d.appendChild(document.createTextNode(String(str)));
-  return d.innerHTML;
+function exportCSV() {
+  if (!featureEnabled("csv_export")) {
+    alert("CSV export is not available for this plan.");
+    return;
+  }
+  if (!results.length) {
+    alert("No results to export.");
+    return;
+  }
+  window.open("/api/export/csv", "_blank");
 }
 
-// ─── Keyboard shortcuts ───
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    document
-      .querySelectorAll(".modal-overlay.active")
-      .forEach((m) => m.classList.remove("active"));
+function toggleSection(sectionId) {
+  const section = document.getElementById(sectionId);
+  if (!section) return;
+  section.classList.toggle("collapsed");
+  const icon = section.querySelector(".section-toggle-icon");
+  if (icon) {
+    icon.textContent = section.classList.contains("collapsed") ? "+" : "-";
+  }
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    document.querySelectorAll(".modal-overlay.active").forEach((m) => m.classList.remove("active"));
   }
 });
 
-// ─── Init ───
-loadCompanies();
-loadScanHistory();
-loadDomainListHistory();
+document.getElementById("companySearch")?.addEventListener("input", refreshCompanyTable);
+document.getElementById("resultSearch")?.addEventListener("input", () => updateResults(results));
+document.getElementById("resultTierFilter")?.addEventListener("change", () => updateResults(results));
+document.getElementById("resultSectorFilter")?.addEventListener("change", () => updateResults(results));
+document.getElementById("resultStatusFilter")?.addEventListener("change", () => updateResults(results));
+["resultScoreMin", "resultScoreMax", "resultFindingsMin", "resultFindingsMax", "resultEmployeesMin", "resultEmployeesMax"].forEach((id) => {
+  document.getElementById(id)?.addEventListener("input", () => updateResults(results));
+});
+document.getElementById("resultSort")?.addEventListener("change", () => updateResults(results));
+document.querySelectorAll("[data-sort-key]").forEach((header) => {
+  header.addEventListener("click", () => setTableSort(header.dataset.sortKey));
+});
+
+loadAccountSummary()
+  .then(async () => {
+    if (appMode === "account") {
+      await Promise.all([loadCompanies(), loadScanHistory(), loadDomainListHistory()]);
+    }
+  })
+  .catch((error) => {
+    console.error(error);
+    alert(error.message || "Failed to load the dashboard.");
+  });

@@ -20,7 +20,17 @@ class HTMLReportGenerator:
     def __init__(self):
         self.generated_at = datetime.now()
     
-    def generate(self, leads: List[LeadScore], output_path: Optional[str] = None, json_data_path: Optional[str] = None) -> str:
+    def generate(
+        self,
+        leads: List[LeadScore],
+        output_path: Optional[str] = None,
+        json_data_path: Optional[str] = None,
+        *,
+        include_sales_angles: bool = True,
+        include_json_export: bool = True,
+        filter_mode: str = "advanced",
+        allow_table_sort: bool = True,
+    ) -> str:
         """
         Generate a complete HTML dashboard.
         
@@ -50,7 +60,11 @@ class HTMLReportGenerator:
             hot_count=hot_count,
             warm_count=warm_count,
             cool_count=cool_count,
-            generated_at=self.generated_at.strftime("%Y-%m-%d %H:%M")
+            generated_at=self.generated_at.strftime("%Y-%m-%d %H:%M"),
+            include_sales_angles=include_sales_angles,
+            include_json_export=include_json_export,
+            filter_mode=filter_mode,
+            allow_table_sort=allow_table_sort,
         )
         
         # Write to file if path provided
@@ -81,7 +95,11 @@ class HTMLReportGenerator:
             hot_count=data['summary']['hot_leads'],
             warm_count=data['summary']['warm_leads'],
             cool_count=data['summary']['cool_leads'],
-            generated_at=data['generated_at'][:16].replace('T', ' ')
+            generated_at=data['generated_at'][:16].replace('T', ' '),
+            include_sales_angles=True,
+            include_json_export=True,
+            filter_mode="advanced",
+            allow_table_sort=True,
         )
         
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +115,12 @@ class HTMLReportGenerator:
         hot_count: int,
         warm_count: int,
         cool_count: int,
-        generated_at: str
+        generated_at: str,
+        *,
+        include_sales_angles: bool,
+        include_json_export: bool,
+        filter_mode: str,
+        allow_table_sort: bool,
     ) -> str:
         """Generate the complete HTML document with Dark Ops theme."""
         
@@ -122,14 +145,18 @@ class HTMLReportGenerator:
         
         sectors_json = json.dumps(sector_counts, ensure_ascii=False)
         
-        # Calculate NIS2 priority distribution  
-        priority_counts = {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'UNKNOWN': 0, 'CRITICAL': 0}
+        # Calculate findings distribution for lead review
+        findings_counts = {"High": 0, "Medium": 0, "Low": 0}
         for lead in leads_data:
-            priority = lead.get('nis2', {}).get('compliance_priority', 'UNKNOWN')
-            if priority in priority_counts:
-                priority_counts[priority] += 1
-        
-        priority_json = json.dumps(priority_counts, ensure_ascii=False)
+            findings = int(lead.get("findings_count") or 0)
+            if findings >= 6:
+                findings_counts["High"] += 1
+            elif findings >= 3:
+                findings_counts["Medium"] += 1
+            else:
+                findings_counts["Low"] += 1
+
+        findings_json = json.dumps(findings_counts, ensure_ascii=False)
         
         # Use string replacement to avoid conflicts with CSS curly braces
         html = self._get_html_template()
@@ -140,8 +167,98 @@ class HTMLReportGenerator:
         html = html.replace('__COOL_COUNT__', str(cool_count))
         html = html.replace('__LEADS_JSON__', leads_json)
         html = html.replace('__SECTORS_JSON__', sectors_json)
-        html = html.replace('__PRIORITY_JSON__', priority_json)
+        html = html.replace('__PRIORITY_JSON__', findings_json)
+        html = html.replace('__FILTERS_BLOCK__', self._build_filters_block(filter_mode))
+        html = html.replace('__TABLE_HEADERS__', self._build_table_headers(allow_table_sort))
+        html = html.replace('__ALLOW_TABLE_SORT__', "true" if allow_table_sort else "false")
+        html = html.replace('__INCLUDE_SALES_ANGLES__', "true" if include_sales_angles else "false")
+        html = html.replace('__JSON_EXPORT_BUTTON__', '<button class="btn btn-secondary" onclick="exportJSON()">Export JSON</button>' if include_json_export else '')
         return html
+
+    @staticmethod
+    def _build_filters_block(filter_mode: str) -> str:
+        search_group = """
+                <div class="filter-group">
+                    <label>Search</label>
+                    <input type="text" id="searchInput" placeholder="Company or domain..." oninput="filterTable()">
+                </div>"""
+        if filter_mode == "search_only":
+            return f"""
+            <div class="filters">
+{search_group}
+            </div>"""
+        if filter_mode in {"basic", "advanced"}:
+            advanced_groups = ""
+            if filter_mode == "advanced":
+                advanced_groups = """
+                <div class="filter-group">
+                    <label>Min Score</label>
+                    <input type="number" id="scoreMin" min="0" step="0.1" oninput="filterTable()">
+                </div>
+                <div class="filter-group">
+                    <label>Max Score</label>
+                    <input type="number" id="scoreMax" min="0" step="0.1" oninput="filterTable()">
+                </div>
+                <div class="filter-group">
+                    <label>Min Findings</label>
+                    <input type="number" id="findingsMin" min="0" step="1" oninput="filterTable()">
+                </div>
+                <div class="filter-group">
+                    <label>Max Findings</label>
+                    <input type="number" id="findingsMax" min="0" step="1" oninput="filterTable()">
+                </div>
+                <div class="filter-group">
+                    <label>Min Employees</label>
+                    <input type="number" id="employeesMin" min="0" step="1" oninput="filterTable()">
+                </div>
+                <div class="filter-group">
+                    <label>Max Employees</label>
+                    <input type="number" id="employeesMax" min="0" step="1" oninput="filterTable()">
+                </div>"""
+            return f"""
+            <div class="filters">
+{search_group}
+                <div class="filter-group">
+                    <label>Tier</label>
+                    <select id="tierFilter" onchange="filterTable()">
+                        <option value="">All Tiers</option>
+                        <option value="HOT">🔴 Hot</option>
+                        <option value="WARM">🟠 Warm</option>
+                        <option value="COOL">🟢 Cool</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Sector</label>
+                    <select id="sectorFilter" onchange="filterTable()">
+                        <option value="">All Sectors</option>
+                    </select>
+                </div>
+{advanced_groups}
+            </div>"""
+        return ""
+
+    @staticmethod
+    def _build_table_headers(allow_table_sort: bool) -> str:
+        headers = [
+            ("rank", "Rank"),
+            ("company", "Company"),
+            ("domain", "Domain"),
+            ("sector", "Sector"),
+            ("employees", "Employees"),
+            ("score", "Score"),
+            ("tier", "Tier"),
+            ("findings", "Findings"),
+        ]
+        rendered = []
+        for key, label in headers:
+            if allow_table_sort:
+                rendered.append(
+                    f"<th onclick=\"sortTable('{key}')\">{label} <span class=\"sort-indicator\">↕</span></th>"
+                )
+            else:
+                rendered.append(f"<th>{label}</th>")
+        rendered.append("<th>Key Gap</th>")
+        return "\n                            ".join(rendered)
     
     def _get_html_template(self) -> str:
         """Return the Dark Ops HTML template with placeholders."""
@@ -209,7 +326,7 @@ class HTMLReportGenerator:
                 </div>
             </div>
             <div class="chart-card">
-                <h3>⚠️ NIS2 Compliance Priority</h3>
+                <h3>⚠️ Findings Severity</h3>
                 <div class="chart-container">
                     <canvas id="priorityChart"></canvas>
                 </div>
@@ -228,44 +345,17 @@ class HTMLReportGenerator:
                 <h2>🏆 Lead Rankings</h2>
                 <div class="export-buttons">
                     <button class="btn btn-secondary" onclick="exportCSV()">📥 Export CSV</button>
+                    __JSON_EXPORT_BUTTON__
                 </div>
             </div>
             
-            <div class="filters">
-                <div class="filter-group">
-                    <label>Search</label>
-                    <input type="text" id="searchInput" placeholder="Company or domain..." oninput="filterTable()">
-                </div>
-                <div class="filter-group">
-                    <label>Tier</label>
-                    <select id="tierFilter" onchange="filterTable()">
-                        <option value="">All Tiers</option>
-                        <option value="HOT">🔴 Hot</option>
-                        <option value="WARM">🟠 Warm</option>
-                        <option value="COOL">🟢 Cool</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Sector</label>
-                    <select id="sectorFilter" onchange="filterTable()">
-                        <option value="">All Sectors</option>
-                    </select>
-                </div>
-            </div>
+            __FILTERS_BLOCK__
             
             <div style="overflow-x: auto;">
                 <table class="leads-table" id="leadsTable">
                     <thead>
                         <tr>
-                            <th onclick="sortTable('rank')">Rank <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('company')">Company <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('domain')">Domain <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('sector')">Sector <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('employees')">Employees <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('score')">Score <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('tier')">Tier <span class="sort-indicator">↕</span></th>
-                            <th onclick="sortTable('findings')">Findings <span class="sort-indicator">↕</span></th>
-                            <th>Key Gap</th>
+                            __TABLE_HEADERS__
                         </tr>
                     </thead>
                     <tbody id="leadsTableBody">
@@ -1283,12 +1373,14 @@ a.btn {
         
         // Populate sector filter
         const sectorSelect = document.getElementById('sectorFilter');
-        Object.keys(sectorCounts).sort().forEach(sector => {
-            const opt = document.createElement('option');
-            opt.value = sector;
-            opt.textContent = sector;
-            sectorSelect.appendChild(opt);
-        });
+        if (sectorSelect) {
+            Object.keys(sectorCounts).sort().forEach(sector => {
+                const opt = document.createElement('option');
+                opt.value = sector;
+                opt.textContent = sector;
+                sectorSelect.appendChild(opt);
+            });
+        }
         
         // Render table
         function renderTable() {
@@ -1330,9 +1422,15 @@ a.btn {
         
         // Filter table
         function filterTable() {
-            const search = document.getElementById('searchInput').value.toLowerCase();
-            const tier = document.getElementById('tierFilter').value;
-            const sector = document.getElementById('sectorFilter').value;
+            const search = (document.getElementById('searchInput')?.value || '').toLowerCase();
+            const tier = document.getElementById('tierFilter')?.value || '';
+            const sector = document.getElementById('sectorFilter')?.value || '';
+            const scoreMin = document.getElementById('scoreMin')?.value || '';
+            const scoreMax = document.getElementById('scoreMax')?.value || '';
+            const findingsMin = document.getElementById('findingsMin')?.value || '';
+            const findingsMax = document.getElementById('findingsMax')?.value || '';
+            const employeesMin = document.getElementById('employeesMin')?.value || '';
+            const employeesMax = document.getElementById('employeesMax')?.value || '';
             
             filteredLeads = leadsData.filter(lead => {
                 const matchesSearch = !search || 
@@ -1340,8 +1438,17 @@ a.btn {
                     lead.domain.toLowerCase().includes(search);
                 const matchesTier = !tier || lead.tier.includes(tier);
                 const matchesSector = !sector || lead.sector === sector;
+                const matchesScoreMin = scoreMin === '' || Number(lead.total_score || 0) >= Number(scoreMin);
+                const matchesScoreMax = scoreMax === '' || Number(lead.total_score || 0) <= Number(scoreMax);
+                const matchesFindingsMin = findingsMin === '' || Number(lead.findings_count || 0) >= Number(findingsMin);
+                const matchesFindingsMax = findingsMax === '' || Number(lead.findings_count || 0) <= Number(findingsMax);
+                const matchesEmployeesMin = employeesMin === '' || Number(lead.employees || 0) >= Number(employeesMin);
+                const matchesEmployeesMax = employeesMax === '' || Number(lead.employees || 0) <= Number(employeesMax);
                 
-                return matchesSearch && matchesTier && matchesSector;
+                return matchesSearch && matchesTier && matchesSector &&
+                    matchesScoreMin && matchesScoreMax &&
+                    matchesFindingsMin && matchesFindingsMax &&
+                    matchesEmployeesMin && matchesEmployeesMax;
             });
             
             sortLeads();
@@ -1350,6 +1457,9 @@ a.btn {
         
         // Sort table
         function sortTable(column) {
+            if (!__ALLOW_TABLE_SORT__) {
+                return;
+            }
             if (currentSort.column === column) {
                 currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
             } else {
@@ -1421,7 +1531,7 @@ a.btn {
             const body = document.getElementById('modalBody');
             const raw = lead.raw_results || {};
             const pdfFilename = 'security_report_' + String(lead.domain || '').replace(/\\./g, '_') + '.pdf';
-            const pdfHref = 'pdfs/' + pdfFilename;
+            const pdfHref = '/output/pdfs/' + pdfFilename;
 
             const dimensionOverviewHtml = (() => {
                 const scores = lead.scores || {};
@@ -1476,10 +1586,6 @@ a.btn {
                 `;
             })();
             
-            const nis2Status = lead.nis2 && lead.nis2.covered 
-                ? `Covered as ${lead.nis2.entity_type} entity in ${lead.nis2.sector}`
-                : 'Not applicable';
-            
             body.innerHTML = `
                 <div class="company-info">
                     <div class="info-item">
@@ -1497,14 +1603,6 @@ a.btn {
                     <div class="info-item">
                         <label>Overall Score</label>
                         <div class="value">${lead.total_score}/${Math.round(lead.max_score)}</div>
-                    </div>
-                    <div class="info-item">
-                        <label>NIS2 Status</label>
-                        <div class="value">${nis2Status}</div>
-                    </div>
-                    <div class="info-item">
-                        <label>Compliance Priority</label>
-                        <div class="value">${lead.nis2?.compliance_priority || 'UNKNOWN'}</div>
                     </div>
                 </div>
                 
@@ -1562,7 +1660,7 @@ a.btn {
                     </div>
                 ` : ''}
                 
-                ${lead.sales_angles.length > 0 ? `
+                ${__INCLUDE_SALES_ANGLES__ && lead.sales_angles.length > 0 ? `
                     <div class="findings-section">
                         <h4>💼 Recommended Sales Approach</h4>
                         ${lead.sales_angles.map((angle, i) => `<div class="finding-item sales">${i + 1}. ${angle}</div>`).join('')}
@@ -1849,7 +1947,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Jobs -->
-                    ${raw.jobs ? `
+                    ${false && raw.jobs ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Security Hiring Signals</span>
@@ -1899,7 +1997,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Website -->
-                    ${raw.website ? `
+                    ${false && raw.website ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Website Signals (Security & NIS2)</span>
@@ -1957,7 +2055,7 @@ a.btn {
                     ` : ''}
                     
                     <!-- Governance -->
-                    ${raw.governance ? `
+                    ${false && raw.governance ? `
                     <div class="tech-section">
                         <div class="tech-header" onclick="toggleSection(this)">
                             <span>Governance Signals</span>
@@ -2078,7 +2176,7 @@ a.btn {
         
         // Export CSV
         function exportCSV() {
-            const headers = ['Rank', 'Company', 'Domain', 'Sector', 'Employees', 'Score', 'Max Score', 'Tier', 'Findings', 'Key Gaps', 'NIS2 Covered', 'Compliance Priority'];
+            const headers = ['Rank', 'Company', 'Domain', 'Sector', 'Employees', 'Score', 'Max Score', 'Tier', 'Findings', 'Key Gaps'];
             const rows = filteredLeads.map((lead, i) => [
                 i + 1,
                 lead.company_name,
@@ -2089,9 +2187,7 @@ a.btn {
                 lead.max_score,
                 lead.tier.replace('🔴 ', '').replace('🟠 ', '').replace('🟢 ', ''),
                 lead.findings_count || 0,
-                lead.key_gaps.join('; '),
-                lead.nis2?.covered ? 'Yes' : 'No',
-                lead.nis2?.compliance_priority || 'UNKNOWN'
+                lead.key_gaps.join('; ')
             ]);
             
             const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\\n');
@@ -2100,6 +2196,17 @@ a.btn {
             const a = document.createElement('a');
             a.href = url;
             a.download = 'lead-scout-report.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function exportJSON() {
+            const json = JSON.stringify(filteredLeads, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'lead-scout-report.json';
             a.click();
             URL.revokeObjectURL(url);
         }
